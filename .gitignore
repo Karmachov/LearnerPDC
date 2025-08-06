@@ -1,0 +1,9 @@
+# Python virtual environment
+.venv/
+
+# macOS system files
+.DS_Store
+
+# Data and output files
+*.xlsx
+*.docx
