@@ -58,7 +58,7 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
         print(f"An error occurred while reading the Excel file: {e}")
         return
 
-    # Calculate midterm percentage for filtering
+   
     df['MidtermPercentage'] = df['Midterm Exam Marks (Out of 30)'].apply(calculate_midterm_percentage)
 
     # Filter based on the midterm percentage
@@ -132,7 +132,7 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
             set_cell_properties(params_table.cell(2, 2), str(row['CGPA (up to previous semester)']), align='CENTER')
             set_cell_properties(params_table.cell(2, 3), "> %", align='CENTER')
 
-            # Doesnt work
+            # Doesnt work...
             params_table.columns[0].width = Inches(0.5)
             params_table.columns[1].width = Inches(4.0)
             params_table.columns[2].width = Inches(1.0)
@@ -216,7 +216,7 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
                 row_cells[3].text = f"{row['MidtermPercentage']:.2f}"
                 row_cells[4].text = str(row['Outcome (Based on clearance in end-semester or makeup exam)'])
             
-            doc.add_paragraph() 
+            doc.add_page_break()
         # --- End Formatting for Format 3 ---
         output_filename = f'{report_prefix}_Format3_Report.docx'
 
