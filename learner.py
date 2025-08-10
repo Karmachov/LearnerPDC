@@ -18,17 +18,6 @@ def get_year_semester_string(roman_numeral):
     }
     return mapping.get(str(roman_numeral).strip().upper(), str(roman_numeral))
 
-def calculate_display_weightage(midterm_marks, cgpa):
-    """Calculates the two-part weightage for display purposes only."""
-    try:
-        # As per the template image (e.g., 5% for a score of 30)
-        weightage1 = (float(midterm_marks) / 30) * 5 
-        # As per the template image (e.g., 3.64 for a CGPA of 10)
-        weightage2 = float(cgpa) * 0.364 
-        return weightage1, weightage2
-    except (ValueError, TypeError):
-        return 0, 0
-
 def calculate_midterm_percentage(midterm_marks):
     """Calculates the midterm score as a percentage for filtering."""
     try:
@@ -120,22 +109,34 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
 
             params_cell = container_table.cell(2, 0)
             params_cell.text = ''
-            params_table = params_cell.add_table(rows=3, cols=3)
+            # Corrected to 4 columns to split weightage
+            params_table = params_cell.add_table(rows=3, cols=4)
             params_table.style = 'Table Grid'
+
+            # Merge header cells for Weightage
+            hdr_cell1 = params_table.cell(0, 2)
+            hdr_cell2 = params_table.cell(0, 3)
+            hdr_cell1.merge(hdr_cell2)
+
             set_cell_properties(params_table.cell(0, 0), 'Sr. No.', bold=True, align='CENTER')
             set_cell_properties(params_table.cell(0, 1), 'Parameter', bold=True, align='CENTER')
-            set_cell_properties(params_table.cell(0, 2), 'Weightage in\nPercentage', bold=True, align='CENTER')
+            set_cell_properties(params_table.cell(0, 2), 'Weightage in Percentage', bold=True, align='CENTER')
             
-            # Calculate display weightages
-            w1, w2 = calculate_display_weightage(row['Midterm Exam Marks (Out of 30)'], row['CGPA (up to previous semester)'])
-
             set_cell_properties(params_table.cell(1, 0), '1', align='CENTER')
             set_cell_properties(params_table.cell(1, 1), 'Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for 30M:')
-            set_cell_properties(params_table.cell(1, 2), f"{w1:.2f}     > %", align='CENTER')
+            set_cell_properties(params_table.cell(1, 2), f"{row['MidtermPercentage']:.2f}", align='CENTER')
+            set_cell_properties(params_table.cell(1, 3), "> %", align='CENTER')
             
             set_cell_properties(params_table.cell(2, 0), '2', align='CENTER')
             set_cell_properties(params_table.cell(2, 1), 'Performance of students in preceding university examination')
-            set_cell_properties(params_table.cell(2, 2), f"{w2:.2f}     > %", align='CENTER')
+            set_cell_properties(params_table.cell(2, 2), str(row['CGPA (up to previous semester)']), align='CENTER')
+            set_cell_properties(params_table.cell(2, 3), "> %", align='CENTER')
+
+            # Adjust column widths
+            params_table.columns[0].width = Inches(0.5)
+            params_table.columns[1].width = Inches(4.0)
+            params_table.columns[2].width = Inches(1.0)
+            params_table.columns[3].width = Inches(0.5)
 
             total_cell = container_table.cell(3, 0)
             total_cell.text = "Total Weightage" # Keep the label but no value
