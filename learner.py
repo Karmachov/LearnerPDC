@@ -132,14 +132,14 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
             set_cell_properties(params_table.cell(2, 2), str(row['CGPA (up to previous semester)']), align='CENTER')
             set_cell_properties(params_table.cell(2, 3), "> %", align='CENTER')
 
-            # Adjust column widths
+            # Doesnt work
             params_table.columns[0].width = Inches(0.5)
             params_table.columns[1].width = Inches(4.0)
             params_table.columns[2].width = Inches(1.0)
             params_table.columns[3].width = Inches(0.5)
 
             total_cell = container_table.cell(3, 0)
-            total_cell.text = "Total Weightage" # Keep the label but no value
+            total_cell.text = "Total Weightage" #no value
 
             footer_cell = container_table.cell(4, 0)
             footer_cell.text = ''
@@ -216,7 +216,7 @@ def generate_word_report(excel_path, format_choice, learner_type, slow_threshold
                 row_cells[3].text = f"{row['MidtermPercentage']:.2f}"
                 row_cells[4].text = str(row['Outcome (Based on clearance in end-semester or makeup exam)'])
             
-            doc.add_paragraph() # Add space between tables
+            doc.add_paragraph() 
         # --- End Formatting for Format 3 ---
         output_filename = f'{report_prefix}_Format3_Report.docx'
 
