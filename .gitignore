@@ -1,9 +1,17 @@
+# Generated report files
+*.pdf
+*.docx
+
 # Python virtual environment
+venv/
 .venv/
 
-# macOS system files
-.DS_Store
+# Python cache
+__pycache__/
+*.pyc
 
-# Data and output files
-*.xlsx
-*.docx
+# VS Code specific
+.vscode/
+
+# macOS specific
+.DS_Store
