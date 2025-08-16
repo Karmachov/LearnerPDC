@@ -2,7 +2,7 @@ import pandas as pd
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_LAYOUT
+from docx.enum.table import WD_ALIGN_VERTICAL
 from datetime import datetime
 import os
 
@@ -101,10 +101,6 @@ class Format1Formatter(BaseFormatter):
             params_cell = container_table.cell(2, 0)
             params_cell.text = ''
             params_table = params_cell.add_table(rows=3, cols=4)
-            try:
-                params_table.layout_algorithm = WD_TABLE_LAYOUT.FIXED
-            except NameError:
-                pass
             params_table.style = 'Table Grid'
 
             hdr_cell1 = params_table.cell(0, 2); hdr_cell2 = params_table.cell(0, 3); hdr_cell1.merge(hdr_cell2)
