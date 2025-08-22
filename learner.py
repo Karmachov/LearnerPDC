@@ -342,22 +342,17 @@ class ReportController:
 
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
 
-        # --- NEW FOLDER CREATION LOGIC ---
+        date_str = datetime.now().strftime('%d_%m_%y')
+        
         base_dir = "Learner Monitor Reports"
         learner_folder = f"{self.learner_type.title()} Learners"
         
-        semester_folder_name = self.semester.upper()
-        if self.semester == 'all':
-            semester_folder = "All_Semesters"
-        else:
-            semester_folder = f"Semester_{semester_folder_name}"
-
-        subject_folder_name = self.subject.replace(' ', '_').title()
-        if self.subject == 'all':
-            subject_folder = "All_Subjects"
-        else:
-            subject_folder = subject_folder_name
-
+        semester_name_for_file = "AllSemesters" if self.semester == 'all' else self.semester.upper()
+        subject_name_for_file = "AllSubjects" if self.subject == 'all' else self.subject.replace(' ', '_').title()
+        
+        semester_folder = f"Semester_{semester_name_for_file}" if self.semester != 'all' else semester_name_for_file
+        subject_folder = subject_name_for_file
+        
         output_dir = os.path.join(base_dir, learner_folder, semester_folder, subject_folder)
 
         try:
@@ -367,7 +362,7 @@ class ReportController:
             return
 
         if self.format_choice == '5':
-            self._generate_all_formats(final_filtered_students, output_dir)
+            self._generate_all_formats(final_filtered_students, output_dir, date_str, semester_name_for_file, subject_name_for_file)
             return
 
         try:
@@ -377,7 +372,8 @@ class ReportController:
             file_extension = 'docx' if self.output_type == 'word' else 'pdf'
             report_name_map = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}
             report_name = report_name_map.get(self.format_choice, "Report")
-            output_filename = f'{self.learner_type.title()}_Learners_{report_name}_Report.{file_extension}'
+            
+            output_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{file_extension}'
 
             full_output_path = os.path.join(output_dir, output_filename)
             self.writer.write(output_object, full_output_path)
@@ -385,17 +381,20 @@ class ReportController:
         except ValueError as e:
             print(e)
 
-    def _generate_all_formats(self, students, output_dir):
+    def _generate_all_formats(self, students, output_dir, date_str, semester_name_for_file, subject_name_for_file):
         """Handles the logic for generating reports for format choice '5'."""
         file_extension = 'docx' if self.output_type == 'word' else 'pdf'
 
+        combined_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{file_extension}'
+        summary_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{file_extension}'
+        
         f1_and_2_formatter = Format1And2DocxFormatter()
         doc1 = f1_and_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        self.writer.write(doc1, os.path.join(output_dir, f'{self.learner_type.title()}_Learners_Combined_Report.{file_extension}'))
+        self.writer.write(doc1, os.path.join(output_dir, combined_filename))
 
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        self.writer.write(doc2, os.path.join(output_dir, f'{self.learner_type.title()}_Learners_Summary_Report.{file_extension}'))
+        self.writer.write(doc2, os.path.join(output_dir, summary_filename))
 
 # ==============================================================================
 # 7. MAIN EXECUTION BLOCK
