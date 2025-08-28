@@ -413,7 +413,7 @@ def get_valid_input(prompt, valid_options=None, input_type=str):
             print("Invalid input. Please enter a valid number.")
 
 if __name__ == "__main__":
-    print("Welcome to the Student Learner Report Generator.")
+    print("Welcome to the Student Learner Monitor Report Generator.")
     excel_file = input("Enter the Excel file name or full file path: ")
 
     if not os.path.exists(excel_file):
