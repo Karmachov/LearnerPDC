@@ -9,9 +9,9 @@ import tempfile
 import platform
 import time
 import getpass
-import traceback  # For better error reporting
+import traceback
+from PyPDF2 import PdfReader
 
-# NEW: Moved imports to the top and added cryptography
 try:
     from docx2pdf import convert
 except ImportError:
@@ -38,60 +38,72 @@ SEMESTER_MAPPING = {
 }
 
 #
-# REPLACE THIS FUNCTION - FINAL VERSION
+# REPLACE THE sign_pdf FUNCTION WITH THIS FINAL, ROBUST VERSION
 #
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
-    """Signs a PDF with a visible signature."""
+    """Signs a PDF with a visible signature on every page, one page at a time."""
     if not all([pdf, key_path, cert_path, image_path, password]):
         print("Skipping signing due to missing information.")
         return
 
     try:
-        # Signature location: (x1, y1, x2, y2) from bottom-left corner
-        signature_box = (400, 50, 580, 150)
-        
+        # Define the signature box for a single page
+        single_page_box = (435, 72, 540, 105) # Your exact (x1, y1, x2, y2)
+
         # The date string needs to be in a specific PDF format
         date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'') # IST
-        
-        signdata = {
-            'sigflags': 3,
-            'contact': 'faculty.email@example.com',
-            'location': 'Manipal, India',
-            'reason': 'I am the author of this document',
-            'signaturebox': signature_box,
-            'signature_img': image_path,
-            'signingdate': date,  # THIS IS THE CORRECTED KEY NAME
-        }
 
-        # 1. Load the private key into a cryptography object
+        # --- REWRITTEN LOOP-BASED SIGNING LOGIC ---
+
+        # 1. Load key and certificate objects ONCE before the loop
         with open(key_path, 'rb') as f:
             private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
-
-        # 2. Load the certificate into a cryptography object
         with open(cert_path, 'rb') as f:
             certificate = load_pem_x509_certificate(f.read())
-
-        # 3. Read the PDF data
+        
+        # 2. Read the initial PDF data
         with open(pdf_path, 'rb') as f:
             pdf_data = f.read()
 
-        # 4. Call sign with the cryptography OBJECTS
-        signed_data = pdf.cms.sign(
-            pdf_data,
-            signdata,
-            key=private_key,
-            cert=certificate,
-            othercerts=()
-        )
+        # 3. Get the number of pages
+        reader = PdfReader(pdf_path)
+        page_count = len(reader.pages)
+
+        # 4. Loop through each page and apply a signature
+        for i in range(page_count):
+            print(f"Signing page {i + 1}/{page_count}...")
+            signdata = {
+                'sigflags': 3,
+                'contact': 'faculty.email@example.com',
+                'location': 'Manipal, India',
+                'reason': 'I am the author of this document',
+                'signaturebox': single_page_box,
+                'signature_img': image_path,
+                'signingdate': date,
+                'page': i  # Tell the library WHICH page to sign (0-indexed)
+            }
+            
+            # The output of one signing becomes the input for the next
+            signed_data_obj = pdf.cms.sign(
+                pdf_data,
+                signdata,
+                key=private_key,
+                cert=certificate,
+                othercerts=()
+            )
+            # Append the new signature object to the PDF data
+            pdf_data += signed_data_obj
         
-        # 5. Write the signed data to the file
+        # --- END OF REWRITTEN LOGIC ---
+        
+        # 5. Write the final, fully-signed PDF data to the file
         with open(pdf_path, 'wb') as f:
-            f.write(pdf_data + signed_data)
+            f.write(pdf_data)
         
-        print(f"Successfully signed '{pdf_path}'")
+        print(f"\nSuccess! Successfully signed all {page_count} pages of '{pdf_path}' ✨")
 
     except Exception:
-        print(f"\n Failed to sign the PDF.")
+        print(f"\nCRITICAL ERROR: Failed to sign the PDF.")
         print("Please check that the key/certificate paths and password are correct.")
         print("----- Full Error Details -----")
         traceback.print_exc()
@@ -138,7 +150,11 @@ class PdfWriter:
                 temp_docx = os.path.join(temp_dir, "temp_report.docx")
                 doc.save(temp_docx)
                 convert(temp_docx, output_filename)
+                
+                # NEW: Add a short delay to allow the conversion process to release the file lock
+                time.sleep(2)
 
+            # This part is for macOS and can be kept
             if platform.system() == "Darwin":
                 time.sleep(1)
 
