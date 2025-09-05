@@ -14,6 +14,7 @@ from PyPDF2 import PdfReader
 import shutil
 import warnings
 
+# Suppress the PyPDF2 warning about using PdfReader instead of PdfFileReader
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 try:
@@ -178,7 +179,7 @@ class PdfWriter:
 # ==============================================================================
 class BaseFormatter:
     """Base class for all formatters with shared helper methods."""
-    COMIC_SANS = "Comic Sans MS"
+    COMIC_SANS = "Brush Script MT Italic"
     def get_year_semester_string(self, roman_numeral):
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
 
@@ -239,9 +240,11 @@ class BaseFormatter:
         params_table.columns[0].width = Inches(0.5); params_table.columns[1].width = Inches(4.0); params_table.columns[2].width = Inches(1.0); params_table.columns[3].width = Inches(0.5)
         container_table.cell(3, 0).text = "Total Weightage"
         footer_cell = container_table.cell(4, 0)
-        footer_cell.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner")
-        footer_cell.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
-        footer_cell.add_paragraph(f"Date: {datetime.now().strftime('%d-%m-%Y')}")
+        p_footer_1 = footer_cell.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner")
+        p_footer_2 = footer_cell.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
+        p_date = footer_cell.add_paragraph()
+        run_date = p_date.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}")
+        run_date.font.name = self.COMIC_SANS
         self.add_signature_line(footer_cell)
 
     def _create_format2_content(self, doc, student):
@@ -268,7 +271,9 @@ class BaseFormatter:
         self.set_cell_properties(content_table.cell(6, 1), str(student.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(7, 0), 'Comments/remarks')
         self.set_cell_properties(content_table.cell(7, 1), str(student.get('Remarks if any', '')), font_name=self.COMIC_SANS)
-        doc.add_paragraph(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}")
+        p_date = doc.add_paragraph()
+        run_date = p_date.add_run(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}")
+        run_date.font.name = self.COMIC_SANS
         self.add_signature_line(doc)
 
     def _generate_pages(self, doc, students, content_method, *args):
