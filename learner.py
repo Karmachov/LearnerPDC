@@ -3,7 +3,7 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
 import tempfile
 import platform
@@ -11,6 +11,10 @@ import time
 import getpass
 import traceback
 from PyPDF2 import PdfReader
+import shutil
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 try:
     from docx2pdf import convert
@@ -36,10 +40,14 @@ SEMESTER_MAPPING = {
     'ii': 'I Year/ II semester',
     'iii': 'II Year/ III semester'
 }
+CERTIFICATE_INFO = {
+    "country": "IN",
+    "state": "Karnataka",
+    "locality": "Manipal",
+    "org": "Manipal Institute of Technology",
+}
 
-#
-# REPLACE THE sign_pdf FUNCTION WITH THIS FINAL, ROBUST VERSION
-#
+
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
     """Signs a PDF with a visible signature on every page, one page at a time."""
     if not all([pdf, key_path, cert_path, image_path, password]):
@@ -47,29 +55,20 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         return
 
     try:
-        # Define the signature box for a single page
-        single_page_box = (435, 72, 540, 105) # Your exact (x1, y1, x2, y2)
+        single_page_box = (435, 72, 540, 105)
+        date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'')
 
-        # The date string needs to be in a specific PDF format
-        date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'') # IST
-
-        # --- REWRITTEN LOOP-BASED SIGNING LOGIC ---
-
-        # 1. Load key and certificate objects ONCE before the loop
         with open(key_path, 'rb') as f:
             private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
         with open(cert_path, 'rb') as f:
             certificate = load_pem_x509_certificate(f.read())
-        
-        # 2. Read the initial PDF data
+
         with open(pdf_path, 'rb') as f:
             pdf_data = f.read()
 
-        # 3. Get the number of pages
         reader = PdfReader(pdf_path)
         page_count = len(reader.pages)
 
-        # 4. Loop through each page and apply a signature
         for i in range(page_count):
             print(f"Signing page {i + 1}/{page_count}...")
             signdata = {
@@ -80,10 +79,9 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
                 'signaturebox': single_page_box,
                 'signature_img': image_path,
                 'signingdate': date,
-                'page': i  # Tell the library WHICH page to sign (0-indexed)
+                'page': i
             }
-            
-            # The output of one signing becomes the input for the next
+
             signed_data_obj = pdf.cms.sign(
                 pdf_data,
                 signdata,
@@ -91,15 +89,12 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
                 cert=certificate,
                 othercerts=()
             )
-            # Append the new signature object to the PDF data
+
             pdf_data += signed_data_obj
-        
-        # --- END OF REWRITTEN LOGIC ---
-        
-        # 5. Write the final, fully-signed PDF data to the file
+
         with open(pdf_path, 'wb') as f:
             f.write(pdf_data)
-        
+
         print(f"\nSuccess! Successfully signed all {page_count} pages of '{pdf_path}' ✨")
 
     except Exception:
@@ -113,17 +108,20 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
 # 1. READER
 # ==============================================================================
 class DataReader:
-    """Reads data from an Excel file and returns it in a neutral format."""
-    def read_excel(self, file_path):
+    """Reads data from an Excel or CSV file and returns it in a neutral format."""
+    def read_data(self, file_path):
         try:
-            df = pd.read_excel(file_path)
+            if file_path.lower().endswith('.csv'):
+                df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path)
             df.columns = df.columns.str.strip()
             return df.to_dict('records')
         except FileNotFoundError:
             print(f"Error: The file '{file_path}' was not found. Please check the path and try again.")
             return None
         except Exception as e:
-            print(f"An error occurred while reading the Excel file: {e}")
+            print(f"An error occurred while reading the data file: {e}")
             return None
 
 # ==============================================================================
@@ -150,11 +148,9 @@ class PdfWriter:
                 temp_docx = os.path.join(temp_dir, "temp_report.docx")
                 doc.save(temp_docx)
                 convert(temp_docx, output_filename)
-                
-                # NEW: Add a short delay to allow the conversion process to release the file lock
-                time.sleep(2)
 
-            # This part is for macOS and can be kept
+            time.sleep(2)
+
             if platform.system() == "Darwin":
                 time.sleep(1)
 
@@ -178,24 +174,37 @@ class PdfWriter:
             print("Please ensure Microsoft Word (on Windows) or LibreOffice (on macOS/Linux) is installed and accessible.")
 
 # ==============================================================================
-# 3. FORMATTERS (No changes)
+# 3. FORMATTERS
 # ==============================================================================
 class BaseFormatter:
+    """Base class for all formatters with shared helper methods."""
+    COMIC_SANS = "Comic Sans MS"
     def get_year_semester_string(self, roman_numeral):
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
-    def set_cell_properties(self, cell, text, bold=False, font_size=10, align='LEFT', valign='TOP'):
+
+    def set_cell_properties(self, cell, text, bold=False, font_size=10, align='LEFT', valign='TOP', font_name=None):
         cell.text = ''
         p = cell.add_paragraph()
         run = p.add_run(str(text))
         run.font.size = Pt(font_size)
         run.bold = bold
-        p.alignment = getattr(WD_ALIGN_PARAGRAPH, align)
-        cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, valign)
+        if font_name:
+            run.font.name = font_name
+        try:
+            p.alignment = getattr(WD_ALIGN_PARAGRAPH, str(align).upper())
+        except AttributeError:
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        try:
+            cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper())
+        except AttributeError:
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+
     def add_signature_line(self, doc_or_cell):
         p = doc_or_cell.add_paragraph()
         p.add_run("\n\n" + "_" * 40 + "\n")
         p.add_run("Signature of the\nsubject teacher / class coordinator")
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
     def _create_format1_content(self, doc, student, slow_threshold, fast_threshold):
         doc.add_heading('Format 1. Assessment of the learning levels of the students:', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
         container_table = doc.add_table(rows=5, cols=1)
@@ -206,13 +215,13 @@ class BaseFormatter:
         p3 = header_cell.add_paragraph(); p3.add_run('Computer Science and Engineering Department').bold = True; p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
         student_info_table = container_table.cell(1, 0).add_table(rows=4, cols=2)
         self.set_cell_properties(student_info_table.cell(0, 0), 'Name of the Student:')
-        self.set_cell_properties(student_info_table.cell(0, 1), str(student['Student Name']))
+        self.set_cell_properties(student_info_table.cell(0, 1), str(student.get('Student Name', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(student_info_table.cell(1, 0), 'Registration Number:')
-        self.set_cell_properties(student_info_table.cell(1, 1), str(student['Register Number of the Student']))
+        self.set_cell_properties(student_info_table.cell(1, 1), str(student.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(student_info_table.cell(2, 0), 'Course:')
-        self.set_cell_properties(student_info_table.cell(2, 1), str(student['Subject Name']).title())
+        self.set_cell_properties(student_info_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.COMIC_SANS)
         self.set_cell_properties(student_info_table.cell(3, 0), 'Year /semester:')
-        self.set_cell_properties(student_info_table.cell(3, 1), self.get_year_semester_string(student['Semester']))
+        self.set_cell_properties(student_info_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.COMIC_SANS)
         params_table = container_table.cell(2, 0).add_table(rows=3, cols=4)
         params_table.style = 'Table Grid'
         hdr_cell1 = params_table.cell(0, 2); hdr_cell2 = params_table.cell(0, 3); hdr_cell1.merge(hdr_cell2)
@@ -221,11 +230,11 @@ class BaseFormatter:
         self.set_cell_properties(params_table.cell(0, 2), 'Weightage in Percentage', bold=True, align='CENTER')
         self.set_cell_properties(params_table.cell(1, 0), '1', align='CENTER')
         self.set_cell_properties(params_table.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:")
-        self.set_cell_properties(params_table.cell(1, 2), f"{student['MidtermPercentage']:.2f}", align='CENTER')
+        self.set_cell_properties(params_table.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.COMIC_SANS)
         self.set_cell_properties(params_table.cell(1, 3), "> %", align='CENTER')
         self.set_cell_properties(params_table.cell(2, 0), '2', align='CENTER')
         self.set_cell_properties(params_table.cell(2, 1), 'Performance of students in preceding university examination')
-        self.set_cell_properties(params_table.cell(2, 2), str(student.get('CGPA (up to previous semester)', 'N/A')), align='CENTER')
+        self.set_cell_properties(params_table.cell(2, 2), str(student.get('CGPA (up to previous semester)', 'N/A')), align='CENTER', font_name=self.COMIC_SANS)
         self.set_cell_properties(params_table.cell(2, 3), "> %", align='CENTER')
         params_table.columns[0].width = Inches(0.5); params_table.columns[1].width = Inches(4.0); params_table.columns[2].width = Inches(1.0); params_table.columns[3].width = Inches(0.5)
         container_table.cell(3, 0).text = "Total Weightage"
@@ -234,6 +243,7 @@ class BaseFormatter:
         footer_cell.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
         footer_cell.add_paragraph(f"Date: {datetime.now().strftime('%d-%m-%Y')}")
         self.add_signature_line(footer_cell)
+
     def _create_format2_content(self, doc, student):
         doc.add_heading('Format -2 Report of performance/ improvement for slow and advanced learners', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
         header_table = doc.add_table(rows=3, cols=1)
@@ -243,23 +253,24 @@ class BaseFormatter:
         content_table = doc.add_table(rows=8, cols=2)
         content_table.style = 'Table Grid'
         self.set_cell_properties(content_table.cell(0, 0), '1. Registration Number')
-        self.set_cell_properties(content_table.cell(0, 1), student['Register Number of the Student'])
+        self.set_cell_properties(content_table.cell(0, 1), str(student.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(1, 0), '2. Name of the student')
-        self.set_cell_properties(content_table.cell(1, 1), student['Student Name'])
+        self.set_cell_properties(content_table.cell(1, 1), str(student.get('Student Name', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(2, 0), '3. Course')
-        self.set_cell_properties(content_table.cell(2, 1), str(student['Subject Name']).title())
+        self.set_cell_properties(content_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(3, 0), '4. Year/Semester')
-        self.set_cell_properties(content_table.cell(3, 1), self.get_year_semester_string(student['Semester']))
+        self.set_cell_properties(content_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(4, 0), '5. Midterm Percentage')
-        self.set_cell_properties(content_table.cell(4, 1), f"{student['MidtermPercentage']:.2f}%")
+        self.set_cell_properties(content_table.cell(4, 1), f"{student.get('MidtermPercentage', 0):.2f}%", font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(5, 0), '6. Activities/ Measure/special programs\ntaken to improve the performance')
-        self.set_cell_properties(content_table.cell(5, 1), str(student['Actions taken to improve performance']).replace(';', '\n'))
+        self.set_cell_properties(content_table.cell(5, 1), str(student.get('Actions taken to improve performance', '')).replace(';', '\n'), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(6, 0), '7. Progress')
-        self.set_cell_properties(content_table.cell(6, 1), str(student['Outcome (Based on clearance in end-semester or makeup exam)']))
+        self.set_cell_properties(content_table.cell(6, 1), str(student.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.COMIC_SANS)
         self.set_cell_properties(content_table.cell(7, 0), 'Comments/remarks')
-        self.set_cell_properties(content_table.cell(7, 1), str(student.get('Remarks if any', '')))
+        self.set_cell_properties(content_table.cell(7, 1), str(student.get('Remarks if any', '')), font_name=self.COMIC_SANS)
         doc.add_paragraph(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}")
         self.add_signature_line(doc)
+
     def _generate_pages(self, doc, students, content_method, *args):
         for i, student in enumerate(students):
             content_method(doc, student, *args)
@@ -289,11 +300,11 @@ class Format3DocxFormatter(BaseFormatter):
                 self.set_cell_properties(table.cell(0, j), col_name, bold=True)
             for index, row_data in group.reset_index(drop=True).iterrows():
                 row_cells = table.add_row().cells
-                row_cells[0].text = str(index + 1)
-                row_cells[1].text = str(row_data['Register Number of the Student'])
-                row_cells[2].text = str(row_data['Student Name'])
-                row_cells[3].text = f"{row_data['MidtermPercentage']:.2f}"
-                row_cells[4].text = str(row_data['Outcome (Based on clearance in end-semester or makeup exam)'])
+                self.set_cell_properties(row_cells[0], str(index + 1), font_name=self.COMIC_SANS)
+                self.set_cell_properties(row_cells[1], str(row_data.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
+                self.set_cell_properties(row_cells[2], str(row_data.get('Student Name', '')), font_name=self.COMIC_SANS)
+                self.set_cell_properties(row_cells[3], f"{row_data.get('MidtermPercentage', 0):.2f}", font_name=self.COMIC_SANS)
+                self.set_cell_properties(row_cells[4], str(row_data.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.COMIC_SANS)
             if i < len(grouped) - 1:
                 doc.add_page_break()
         return doc
@@ -309,7 +320,7 @@ class Format1And2DocxFormatter(BaseFormatter):
         return doc
 
 # ==============================================================================
-# 4. FACTORIES
+# 5. FACTORIES
 # ==============================================================================
 def get_writer(output_type):
     if output_type == 'word':
@@ -332,7 +343,7 @@ def get_formatter(format_choice):
     raise ValueError(f"Unsupported format choice '{format_choice}'")
 
 # ==============================================================================
-# 5. DATA PROCESSOR
+# 6. DATA PROCESSOR
 # ==============================================================================
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
@@ -387,7 +398,7 @@ class ReportController:
         if not self.writer:
             print("Report generation halted due to invalid writer configuration.")
             return
-        all_student_data = self.reader.read_excel(self.excel_path)
+        all_student_data = self.reader.read_data(self.excel_path)
         if not all_student_data: return
         processed_students = self.processor.process_data(all_student_data)
         final_filtered_students = self.processor.filter_students(
