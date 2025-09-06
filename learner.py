@@ -50,7 +50,6 @@ CERTIFICATE_INFO = {
 
 
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
-    """Signs a PDF with a visible signature on every page, one page at a time."""
     if not all([pdf, key_path, cert_path, image_path, password]):
         print("Skipping signing due to missing information.")
         return
@@ -109,7 +108,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
 # 1. READER
 # ==============================================================================
 class DataReader:
-    """Reads data from an Excel or CSV file and returns it in a neutral format."""
+    
     def read_data(self, file_path):
         try:
             if file_path.lower().endswith('.csv'):
@@ -129,7 +128,7 @@ class DataReader:
 # 2. WRITERS
 # ==============================================================================
 class DocxWriter:
-    """Takes a Document object and saves it to a .docx file."""
+    
     def write(self, doc, output_filename, **kwargs):
         try:
             doc.save(output_filename)
@@ -138,7 +137,7 @@ class DocxWriter:
             print(f"\nError: Could not save the file. Details: {e}")
 
 class PdfWriter:
-    """Creates a DOCX, converts it to PDF, and optionally signs it."""
+    
     def write(self, doc, output_filename, sign_info=None, format_choice=None):
         if convert is None:
             print("\nError: 'docx2pdf' not installed. Cannot generate PDF.")
@@ -178,7 +177,7 @@ class PdfWriter:
 # 3. FORMATTERS
 # ==============================================================================
 class BaseFormatter:
-    """Base class for all formatters with shared helper methods."""
+    
     COMIC_SANS = "Brush Script MT Italic"
     def get_year_semester_string(self, roman_numeral):
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
@@ -325,7 +324,7 @@ class Format1And2DocxFormatter(BaseFormatter):
         return doc
 
 # ==============================================================================
-# 5. FACTORIES
+# 4. FACTORIES
 # ==============================================================================
 def get_writer(output_type):
     if output_type == 'word':
@@ -348,7 +347,7 @@ def get_formatter(format_choice):
     raise ValueError(f"Unsupported format choice '{format_choice}'")
 
 # ==============================================================================
-# 6. DATA PROCESSOR
+# 5. DATA PROCESSOR
 # ==============================================================================
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
@@ -456,7 +455,7 @@ class ReportController:
 # 7. MAIN EXECUTION BLOCK
 # ==============================================================================
 def get_valid_input(prompt, valid_options=None, input_type=str):
-    """Helper function to get and validate user input."""
+    
     while True:
         user_input = input(prompt)
         try:
