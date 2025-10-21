@@ -1,21 +1,29 @@
-import pandas as pd
-from docx import Document
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_ALIGN_VERTICAL
-from datetime import datetime, timedelta, timezone
+# --- Standard Library Imports ---
 import os
 import tempfile
 import platform
 import time
 import getpass
 import traceback
-from PyPDF2 import PdfReader
-import shutil
 import warnings
+import re
+from datetime import datetime
 
-# Suppress the PyPDF2 warning about using PdfReader instead of PdfFileReader
+# --- Third-Party Library Imports ---
+import pandas as pd
+import openpyxl  # Required for reading Excel headers
+from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+
+# --- Optional Imports for PDF Generation and Signing ---
+# These are placed in try-except blocks to allow the script to run
+# with basic functionality even if they are not installed.
+
+# Suppress a known warning from PyPDF2
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+from PyPDF2 import PdfReader
 
 try:
     from docx2pdf import convert
@@ -28,8 +36,8 @@ try:
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
     from cryptography.x509 import load_pem_x509_certificate
 except ImportError:
-    print("Warning: Required crypto libraries not found. PDF signing will not be available.")
-    print("Please run: pip install endesive cryptography")
+    print("Warning: Required crypto libraries 'endesive' and 'cryptography' not found.")
+    print("PDF signing will not be available. Please run: pip install endesive cryptography")
     pdf = None
 
 # ==============================================================================
@@ -39,22 +47,25 @@ MIDTERM_TOTAL_MARKS = 30
 SEMESTER_MAPPING = {
     'i': 'I Year/ I semester',
     'ii': 'I Year/ II semester',
-    'iii': 'II Year/ III semester'
-}
-CERTIFICATE_INFO = {
-    "country": "IN",
-    "state": "Karnataka",
-    "locality": "Manipal",
-    "org": "Manipal Institute of Technology",
+    'iii': 'II Year/ III semester',
+    'iv': 'II Year/ IV semester',
+    'v': 'III Year/ V semester',
+    'vi': 'III Year/ VI semester',
+    'vii': 'IV Year/ VII semester',
+    'viii': 'IV Year/ VIII semester',
 }
 
-
+# ==============================================================================
+# 1. PDF SIGNING UTILITY
+# ==============================================================================
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
+    """Signs a PDF with a visible signature on every page, one page at a time."""
     if not all([pdf, key_path, cert_path, image_path, password]):
         print("Skipping signing due to missing information.")
         return
 
     try:
+        # Define signature box coordinates (x1, y1, x2, y2) from bottom-left
         single_page_box = (435, 72, 540, 105)
         date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'')
 
@@ -62,12 +73,13 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
         with open(cert_path, 'rb') as f:
             certificate = load_pem_x509_certificate(f.read())
-
-        with open(pdf_path, 'rb') as f:
-            pdf_data = f.read()
+        
+        with open(pdf_path, 'rb') as f_in:
+            pdf_data_initial = f_in.read()
 
         reader = PdfReader(pdf_path)
         page_count = len(reader.pages)
+        signed_data_obj = b''
 
         for i in range(page_count):
             print(f"Signing page {i + 1}/{page_count}...")
@@ -81,19 +93,19 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
                 'signingdate': date,
                 'page': i
             }
-
-            signed_data_obj = pdf.cms.sign(
-                pdf_data,
+            # The signed data object grows with each page
+            signed_data_obj += pdf.cms.sign(
+                pdf_data_initial,
                 signdata,
                 key=private_key,
                 cert=certificate,
                 othercerts=()
             )
 
-            pdf_data += signed_data_obj
-
-        with open(pdf_path, 'wb') as f:
-            f.write(pdf_data)
+        # Append the accumulated signatures to the original PDF data
+        final_pdf_data = pdf_data_initial + signed_data_obj
+        with open(pdf_path, 'wb') as f_out:
+            f_out.write(final_pdf_data)
 
         print(f"\nSuccess! Successfully signed all {page_count} pages of '{pdf_path}' ✨")
 
@@ -105,30 +117,45 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         print("----------------------------")
 
 # ==============================================================================
-# 1. READER
+# 2. DATA READER
 # ==============================================================================
 class DataReader:
-    
+    """Reads data from an Excel or CSV file and returns it in a neutral format."""
     def read_data(self, file_path):
+        """Reads the Excel file, returning both the data and the subject name."""
+        subject_name = self._extract_subject_from_header(file_path)
+        if not subject_name:
+            subject_name = input("Could not auto-detect subject. Please enter Subject Name manually: ")
+
         try:
-            if file_path.lower().endswith('.csv'):
-                df = pd.read_csv(file_path)
-            else:
-                df = pd.read_excel(file_path)
+            df = pd.read_excel(file_path, skiprows=2)
             df.columns = df.columns.str.strip()
-            return df.to_dict('records')
+            df.rename(columns=self.COLUMN_MAPPING, inplace=True)
+
+            required_cols = ['Register Number of the Student', 'Student Name', 'Midterm Exam Marks (Out of 30)']
+            if not all(col in df.columns for col in required_cols):
+                print(f"Error: The file is missing one of the required columns: {required_cols}")
+                return None, None
+
+            # --- FIX: Ensure Registration Number is a string without decimals ---
+            # Pandas often reads numeric columns as floats. This converts them to strings
+            # and removes the trailing '.0' if it exists.
+            reg_col = 'Register Number of the Student'
+            df[reg_col] = df[reg_col].astype(str).str.replace(r'\.0$', '', regex=True)
+
+            return df.to_dict('records'), subject_name
         except FileNotFoundError:
-            print(f"Error: The file '{file_path}' was not found. Please check the path and try again.")
-            return None
+            print(f"Error: The file '{file_path}' was not found.")
+            return None, None
         except Exception as e:
             print(f"An error occurred while reading the data file: {e}")
-            return None
+            return None, None
 
 # ==============================================================================
-# 2. WRITERS
+# 3. DATA PROCESSOR
 # ==============================================================================
 class DocxWriter:
-    
+    """Takes a Document object and saves it to a .docx file."""
     def write(self, doc, output_filename, **kwargs):
         try:
             doc.save(output_filename)
@@ -137,7 +164,7 @@ class DocxWriter:
             print(f"\nError: Could not save the file. Details: {e}")
 
 class PdfWriter:
-    
+    """Creates a DOCX, converts it to PDF, and optionally signs it."""
     def write(self, doc, output_filename, sign_info=None, format_choice=None):
         if convert is None:
             print("\nError: 'docx2pdf' not installed. Cannot generate PDF.")
@@ -174,10 +201,10 @@ class PdfWriter:
             print("Please ensure Microsoft Word (on Windows) or LibreOffice (on macOS/Linux) is installed and accessible.")
 
 # ==============================================================================
-# 3. FORMATTERS
+# 4. REPORT FORMATTERS
 # ==============================================================================
 class BaseFormatter:
-    
+    """Base class for all formatters with shared helper methods."""
     COMIC_SANS = "Brush Script MT Italic"
     def get_year_semester_string(self, roman_numeral):
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
@@ -190,89 +217,85 @@ class BaseFormatter:
         run.bold = bold
         if font_name:
             run.font.name = font_name
-        try:
-            p.alignment = getattr(WD_ALIGN_PARAGRAPH, str(align).upper())
-        except AttributeError:
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        try:
-            cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper())
-        except AttributeError:
-            cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+        p.alignment = getattr(WD_ALIGN_PARAGRAPH, str(align).upper(), WD_ALIGN_PARAGRAPH.LEFT)
+        cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper(), WD_ALIGN_VERTICAL.TOP)
 
     def add_signature_line(self, doc_or_cell):
         p = doc_or_cell.add_paragraph()
         p.add_run("\n\n" + "_" * 40 + "\n")
         p.add_run("Signature of the\nsubject teacher / class coordinator")
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    def _add_document_header(self, cell):
+        p1 = cell.add_paragraph(); p1.add_run('Manipal Institute of Technology').bold = True; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p2 = cell.add_paragraph(); p2.add_run('MAHE Manipal').bold = True; p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p3 = cell.add_paragraph(); p3.add_run('Computer Science and Engineering Department').bold = True; p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     def _create_format1_content(self, doc, student, slow_threshold, fast_threshold):
         doc.add_heading('Format 1. Assessment of the learning levels of the students:', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
         container_table = doc.add_table(rows=5, cols=1)
         container_table.style = 'Table Grid'
-        header_cell = container_table.cell(0, 0)
-        p1 = header_cell.add_paragraph(); p1.add_run('Manipal Institute of Technology').bold = True; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p2 = header_cell.add_paragraph(); p2.add_run('MAHE Manipal').bold = True; p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p3 = header_cell.add_paragraph(); p3.add_run('Computer Science and Engineering Department').bold = True; p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self._add_document_header(container_table.cell(0, 0))
+        
         student_info_table = container_table.cell(1, 0).add_table(rows=4, cols=2)
         self.set_cell_properties(student_info_table.cell(0, 0), 'Name of the Student:')
-        self.set_cell_properties(student_info_table.cell(0, 1), str(student.get('Student Name', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(student_info_table.cell(0, 1), student.get('Student Name', ''), font_name=self.FONT_NAME)
         self.set_cell_properties(student_info_table.cell(1, 0), 'Registration Number:')
-        self.set_cell_properties(student_info_table.cell(1, 1), str(student.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(student_info_table.cell(1, 1), student.get('Register Number of the Student', ''), font_name=self.FONT_NAME)
         self.set_cell_properties(student_info_table.cell(2, 0), 'Course:')
-        self.set_cell_properties(student_info_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.COMIC_SANS)
+        self.set_cell_properties(student_info_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.FONT_NAME)
         self.set_cell_properties(student_info_table.cell(3, 0), 'Year /semester:')
-        self.set_cell_properties(student_info_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(student_info_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.FONT_NAME)
+        
         params_table = container_table.cell(2, 0).add_table(rows=3, cols=4)
         params_table.style = 'Table Grid'
-        hdr_cell1 = params_table.cell(0, 2); hdr_cell2 = params_table.cell(0, 3); hdr_cell1.merge(hdr_cell2)
+        params_table.cell(0, 2).merge(params_table.cell(0, 3))
         self.set_cell_properties(params_table.cell(0, 0), 'Sr. No.', bold=True, align='CENTER')
         self.set_cell_properties(params_table.cell(0, 1), 'Parameter', bold=True, align='CENTER')
         self.set_cell_properties(params_table.cell(0, 2), 'Weightage in Percentage', bold=True, align='CENTER')
         self.set_cell_properties(params_table.cell(1, 0), '1', align='CENTER')
         self.set_cell_properties(params_table.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:")
-        self.set_cell_properties(params_table.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.COMIC_SANS)
+        self.set_cell_properties(params_table.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.FONT_NAME)
         self.set_cell_properties(params_table.cell(1, 3), "> %", align='CENTER')
         self.set_cell_properties(params_table.cell(2, 0), '2', align='CENTER')
         self.set_cell_properties(params_table.cell(2, 1), 'Performance of students in preceding university examination')
-        self.set_cell_properties(params_table.cell(2, 2), str(student.get('CGPA (up to previous semester)', 'N/A')), align='CENTER', font_name=self.COMIC_SANS)
+        self.set_cell_properties(params_table.cell(2, 2), str(student.get('CGPA (up to previous semester)', '')), align='CENTER', font_name=self.FONT_NAME)
         self.set_cell_properties(params_table.cell(2, 3), "> %", align='CENTER')
-        params_table.columns[0].width = Inches(0.5); params_table.columns[1].width = Inches(4.0); params_table.columns[2].width = Inches(1.0); params_table.columns[3].width = Inches(0.5)
+        
         container_table.cell(3, 0).text = "Total Weightage"
         footer_cell = container_table.cell(4, 0)
-        p_footer_1 = footer_cell.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner")
-        p_footer_2 = footer_cell.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
+        footer_cell.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner")
+        footer_cell.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
         p_date = footer_cell.add_paragraph()
-        run_date = p_date.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}")
-        run_date.font.name = self.COMIC_SANS
+        p_date.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.FONT_NAME
         self.add_signature_line(footer_cell)
 
     def _create_format2_content(self, doc, student):
         doc.add_heading('Format -2 Report of performance/ improvement for slow and advanced learners', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
-        header_table = doc.add_table(rows=3, cols=1)
-        p1 = header_table.cell(0, 0).paragraphs[0]; p1.add_run('Manipal Institute of Technology').bold = True; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p2 = header_table.cell(1, 0).paragraphs[0]; p2.add_run('MAHE Manipal').bold = True; p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p3 = header_table.cell(2, 0).paragraphs[0]; p3.add_run('Computer Science and Engineering Department').bold = True; p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        header_table = doc.add_table(rows=1, cols=1)
+        self._add_document_header(header_table.cell(0,0))
+        
         content_table = doc.add_table(rows=8, cols=2)
         content_table.style = 'Table Grid'
         self.set_cell_properties(content_table.cell(0, 0), '1. Registration Number')
-        self.set_cell_properties(content_table.cell(0, 1), str(student.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(0, 1), student.get('Register Number of the Student', ''), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(1, 0), '2. Name of the student')
-        self.set_cell_properties(content_table.cell(1, 1), str(student.get('Student Name', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(1, 1), student.get('Student Name', ''), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(2, 0), '3. Course')
-        self.set_cell_properties(content_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(2, 1), str(student.get('Subject Name', '')).title(), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(3, 0), '4. Year/Semester')
-        self.set_cell_properties(content_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(4, 0), '5. Midterm Percentage')
-        self.set_cell_properties(content_table.cell(4, 1), f"{student.get('MidtermPercentage', 0):.2f}%", font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(4, 1), f"{student.get('MidtermPercentage', 0):.2f}%", font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(5, 0), '6. Activities/ Measure/special programs\ntaken to improve the performance')
-        self.set_cell_properties(content_table.cell(5, 1), str(student.get('Actions taken to improve performance', '')).replace(';', '\n'), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(5, 1), str(student.get('Actions taken to improve performance', '')).replace(';', '\n'), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(6, 0), '7. Progress')
-        self.set_cell_properties(content_table.cell(6, 1), str(student.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(6, 1), str(student.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.FONT_NAME)
         self.set_cell_properties(content_table.cell(7, 0), 'Comments/remarks')
-        self.set_cell_properties(content_table.cell(7, 1), str(student.get('Remarks if any', '')), font_name=self.COMIC_SANS)
+        self.set_cell_properties(content_table.cell(7, 1), str(student.get('Remarks if any', '')), font_name=self.FONT_NAME)
+        
         p_date = doc.add_paragraph()
-        run_date = p_date.add_run(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}")
-        run_date.font.name = self.COMIC_SANS
+        p_date.add_run(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}").font.name = self.FONT_NAME
         self.add_signature_line(doc)
 
     def _generate_pages(self, doc, students, content_method, *args):
@@ -281,14 +304,17 @@ class BaseFormatter:
             if i < len(students) - 1:
                 doc.add_page_break()
         return doc
+
 class Format1DocxFormatter(BaseFormatter):
     def format(self, students, slow_threshold, fast_threshold):
         doc = Document()
         return self._generate_pages(doc, students, self._create_format1_content, slow_threshold, fast_threshold)
+
 class Format2DocxFormatter(BaseFormatter):
     def format(self, students, slow_threshold, fast_threshold):
         doc = Document()
         return self._generate_pages(doc, students, self._create_format2_content)
+
 class Format3DocxFormatter(BaseFormatter):
     def format(self, students, slow_threshold, fast_threshold):
         doc = Document()
@@ -304,14 +330,15 @@ class Format3DocxFormatter(BaseFormatter):
                 self.set_cell_properties(table.cell(0, j), col_name, bold=True)
             for index, row_data in group.reset_index(drop=True).iterrows():
                 row_cells = table.add_row().cells
-                self.set_cell_properties(row_cells[0], str(index + 1), font_name=self.COMIC_SANS)
-                self.set_cell_properties(row_cells[1], str(row_data.get('Register Number of the Student', '')), font_name=self.COMIC_SANS)
-                self.set_cell_properties(row_cells[2], str(row_data.get('Student Name', '')), font_name=self.COMIC_SANS)
-                self.set_cell_properties(row_cells[3], f"{row_data.get('MidtermPercentage', 0):.2f}", font_name=self.COMIC_SANS)
-                self.set_cell_properties(row_cells[4], str(row_data.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.COMIC_SANS)
+                self.set_cell_properties(row_cells[0], str(index + 1), font_name=self.FONT_NAME)
+                self.set_cell_properties(row_cells[1], str(row_data.get('Register Number of the Student', '')), font_name=self.FONT_NAME)
+                self.set_cell_properties(row_cells[2], str(row_data.get('Student Name', '')), font_name=self.FONT_NAME)
+                self.set_cell_properties(row_cells[3], f"{row_data.get('MidtermPercentage', 0):.2f}", font_name=self.FONT_NAME)
+                self.set_cell_properties(row_cells[4], str(row_data.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.FONT_NAME)
             if i < len(grouped) - 1:
                 doc.add_page_break()
         return doc
+
 class Format1And2DocxFormatter(BaseFormatter):
     def format(self, students, slow_threshold, fast_threshold):
         doc = Document()
@@ -324,30 +351,24 @@ class Format1And2DocxFormatter(BaseFormatter):
         return doc
 
 # ==============================================================================
-# 4. FACTORIES
+# 5. FACTORIES
 # ==============================================================================
 def get_writer(output_type):
-    if output_type == 'word':
-        return DocxWriter()
-    elif output_type == 'pdf':
-        if convert is None:
-            raise ValueError("PDF output is not available. 'docx2pdf' module not found.")
-        return PdfWriter()
+    if output_type == 'word': return DocxWriter()
+    if output_type == 'pdf': return PdfWriter()
     raise ValueError(f"Unsupported output type: {output_type}")
+
 def get_formatter(format_choice):
     formatters = {
-        '1': Format1DocxFormatter(),
-        '2': Format2DocxFormatter(),
-        '3': Format3DocxFormatter(),
-        '4': Format1And2DocxFormatter(),
+        '1': Format1DocxFormatter(), '2': Format2DocxFormatter(),
+        '3': Format3DocxFormatter(), '4': Format1And2DocxFormatter(),
     }
     formatter = formatters.get(format_choice)
-    if formatter:
-        return formatter
+    if formatter: return formatter
     raise ValueError(f"Unsupported format choice '{format_choice}'")
 
 # ==============================================================================
-# 5. DATA PROCESSOR
+# 6. DATA PROCESSOR
 # ==============================================================================
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
@@ -381,86 +402,94 @@ class StudentDataProcessor:
 # 6. CONTROLLER
 # ==============================================================================
 class ReportController:
-    def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, subject, semester, sign_info):
+    def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
         self.excel_path = excel_path
         self.format_choice = format_choice
         self.learner_type = learner_type
         self.slow_threshold = slow_thresh
         self.fast_threshold = fast_thresh
         self.output_type = output_type
-        self.subject = subject.lower().strip()
+        self.subject = ""
         self.semester = semester.lower().strip()
         self.sign_info = sign_info
+        self.common_comment = common_comment
         self.reader = DataReader()
         self.processor = StudentDataProcessor()
-        try:
-            self.writer = get_writer(output_type)
-        except ValueError as e:
-            print(e)
-            self.writer = None
+        self.writer = get_writer(output_type)
+
     def run(self):
-        if not self.writer:
-            print("Report generation halted due to invalid writer configuration.")
-            return
-        all_student_data = self.reader.read_data(self.excel_path)
+        all_student_data, detected_subject = self.reader.read_data(self.excel_path)
         if not all_student_data: return
-        processed_students = self.processor.process_data(all_student_data)
+        self.subject = detected_subject.lower().strip()
+
+        processed_students = self.processor.process_data(all_student_data, self.subject, self.semester, self.common_comment)
+        
         final_filtered_students = self.processor.filter_students(
-            processed_students, self.semester, self.subject, self.learner_type,
+            processed_students, 'all', 'all', self.learner_type,
             self.slow_threshold, self.fast_threshold
         )
+        
         if not final_filtered_students:
-            print(f"\nNo students found for the selected criteria (Subject: '{self.subject}', Semester: '{self.semester}').")
+            print(f"\nNo students found for the selected criteria.")
             return
+
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
+        
+        # --- Create dynamic output directory structure ---
         date_str = datetime.now().strftime('%d_%m_%y')
         base_dir = "Learner Monitor Reports"
         learner_folder = f"{self.learner_type.title()} Learners"
-        semester_name_for_file = "AllSemesters" if self.semester == 'all' else self.semester.upper()
-        subject_name_for_file = "AllSubjects" if self.subject == 'all' else self.subject.replace(' ', '_').title()
-        semester_folder = f"Semester_{semester_name_for_file}" if self.semester != 'all' else semester_name_for_file
-        subject_folder = subject_name_for_file
-        output_dir = os.path.join(base_dir, learner_folder, semester_folder, subject_folder)
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-        except Exception as e:
-            print(f"Error creating output directory: {e}")
-            return
+        semester_name_for_file = self.semester.upper()
+        
+        # Sanitize subject name to be used in file paths
+        subject_name_for_file = self.subject.replace(' ', '_').title()
+        subject_name_for_file = re.sub(r'[\\/*?:"<>|]',"", subject_name_for_file) # Remove illegal chars
+
+        output_dir = os.path.join(base_dir, learner_folder, f"Semester_{semester_name_for_file}", subject_name_for_file)
+        os.makedirs(output_dir, exist_ok=True)
+        
         if self.format_choice == '5':
             self._generate_all_formats(final_filtered_students, output_dir, date_str, semester_name_for_file, subject_name_for_file)
             return
-        try:
-            formatter = get_formatter(self.format_choice)
-            output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
-            file_extension = 'docx' if self.output_type == 'word' else 'pdf'
-            report_name_map = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}
-            report_name = report_name_map.get(self.format_choice, "Report")
-            output_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{file_extension}'
-            full_output_path = os.path.join(output_dir, output_filename)
-            self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
-        except ValueError as e:
-            print(e)
+
+        formatter = get_formatter(self.format_choice)
+        output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
+        
+        file_extension = 'docx' if self.output_type == 'word' else 'pdf'
+        report_name = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}.get(self.format_choice, "Report")
+        output_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{file_extension}'
+        full_output_path = os.path.join(output_dir, output_filename)
+        
+        self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
+
     def _generate_all_formats(self, students, output_dir, date_str, semester_name_for_file, subject_name_for_file):
         file_extension = 'docx' if self.output_type == 'word' else 'pdf'
+        
+        # Combined Report (Format 1 & 2)
         combined_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{file_extension}'
-        summary_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{file_extension}'
         f1_and_2_formatter = Format1And2DocxFormatter()
         doc1 = f1_and_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        self.writer.write(doc1, os.path.join(output_dir, combined_filename), sign_info=self.sign_info, format_choice='5')
+        self.writer.write(doc1, os.path.join(output_dir, combined_filename), sign_info=self.sign_info, format_choice='4') # Sign as if format 4
+
+        # Summary Report (Format 3)
+        summary_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{file_extension}'
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        self.writer.write(doc2, os.path.join(output_dir, summary_filename), sign_info=self.sign_info, format_choice='3')
+        self.writer.write(doc2, os.path.join(output_dir, summary_filename), sign_info=self.sign_info, format_choice='3') # Don't sign summary
 
 # ==============================================================================
-# 7. MAIN EXECUTION BLOCK
+# 8. MAIN EXECUTION BLOCK (User Interface)
 # ==============================================================================
 def get_valid_input(prompt, valid_options=None, input_type=str):
     
     while True:
-        user_input = input(prompt)
+        user_input = input(prompt).strip()
+        if not user_input and input_type is not str:
+             print("This field cannot be empty.")
+             continue
         try:
             converted_input = input_type(user_input)
-            if valid_options and converted_input not in valid_options:
+            if valid_options and str(converted_input) not in valid_options:
                 print(f"Invalid input. Please choose from {valid_options}.")
                 continue
             return converted_input
@@ -468,46 +497,52 @@ def get_valid_input(prompt, valid_options=None, input_type=str):
             print("Invalid input. Please enter a valid number.")
 
 if __name__ == "__main__":
+    print("-" * 50)
     print("Welcome to the Student Learner Report Generator.")
+    print("-" * 50)
+
     excel_file = input("Enter the Excel file name or full file path: ")
     if not os.path.exists(excel_file):
         print(f"Error: The file '{excel_file}' does not exist.")
         exit()
-    subject_filter = input("Enter Subject Name to filter by (or 'all' for all subjects): ").strip()
-    semester_filter = input("Enter Semester to filter by (e.g., 'III' or 'all'): ").strip()
+    
+    semester_filter = input("Enter Semester (e.g., 'III', 'V', etc.): ")
     output_format = get_valid_input("Choose output format ('word' or 'pdf'): ", ['word', 'pdf'])
     learner = get_valid_input("Generate report for 'fast' or 'slow' learners? ", ['fast', 'slow'])
+    
+    if learner == 'slow':
+        comment = input("Enter common action for SLOW learners (e.g., 'Remedial classes conducted'): ")
+    else:
+        comment = input("Enter common action for FAST learners (e.g., 'Advanced assignments given'): ")
+
     slow_thresh = get_valid_input("Enter percentage threshold for SLOW learners (e.g., 40): ", input_type=float)
     fast_thresh = get_valid_input("Enter percentage threshold for FAST learners (e.g., 80): ", input_type=float)
+    
     print("\nPlease choose a report format:")
-    print(" 1: Format 1 - Assessment of learning levels")
-    print(" 2: Format 2 - Report of performance/improvement")
-    print(" 3: Format 3 - Tabular Summary Report")
-    print(" 4: Combined Format 1 & 2")
-    print(" 5: All Formats (Generates 2 separate files)")
+    print(" 1: Format 1 - Assessment of learning levels (One page per student)")
+    print(" 2: Format 2 - Report of performance/improvement (One page per student)")
+    print(" 3: Format 3 - Tabular Summary Report (All students on one page)")
+    print(" 4: Combined Format 1 & 2 (Two pages per student in one file)")
+    print(" 5: All Formats (Generates two separate files: Combined and Summary)")
     format_num = get_valid_input("Enter your choice (1, 2, 3, 4, or 5): ", ['1', '2', '3', '4', '5'])
     
     signing_data = {'should_sign': False}
     if output_format == 'pdf':
         sign_choice = get_valid_input("\nDo you want to digitally sign the PDF report? (y/n): ", ['y', 'n'])
-        if sign_choice == 'y':
+        if sign_choice.lower() == 'y':
             if pdf is None:
-                print("\nCannot sign PDF because the required libraries are not installed.")
-                print("Please install them with: pip install endesive cryptography")
+                print("\nCannot sign PDF. Please install required libraries with: pip install endesive cryptography")
             else:
-                print("\nPlease provide the paths to your signing assets.")
-                key_file = input("Path to your private key file (e.g., private_key.pem): ")
-                cert_file = input("Path to your certificate file (e.g., certificate.pem): ")
-                image_file = input("Path to your signature image file (e.g., signature.png): ")
+                print("\nPlease provide paths to your signing assets.")
+                key_file = input("Path to your private key file (.pem): ")
+                cert_file = input("Path to your certificate file (.pem): ")
+                image_file = input("Path to your signature image file (.png): ")
                 password = getpass.getpass("Enter the password for your private key: ")
-                
-                signing_data = {
-                    'should_sign': True,
-                    'key_path': key_file,
-                    'cert_path': cert_file,
-                    'image_path': image_file,
-                    'password': password
-                }
-    controller = ReportController(excel_file, format_num, learner, slow_thresh, fast_thresh, output_format, subject_filter, semester_filter, signing_data)
+                signing_data = {'should_sign': True, 'key_path': key_file, 'cert_path': cert_file, 'image_path': image_file, 'password': password}
+    
+    controller = ReportController(excel_file, format_num, learner, slow_thresh, fast_thresh, output_format, semester_filter, signing_data, comment)
     controller.run()
-    print("\nReport generation completed.")
+    
+    print("\nReport generation process finished.")
+    input("Press Enter to exit.")
+
