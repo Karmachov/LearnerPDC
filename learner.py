@@ -59,14 +59,17 @@ SEMESTER_MAPPING = {
 # 1. PDF SIGNING UTILITY
 # ==============================================================================
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
-    """Signs a PDF with a visible signature on every page, one page at a time."""
+    """
+    Signs a PDF with ONE digital signature, but places a
+    VISIBLE signature on EVERY page.
+    """
     if not all([pdf, key_path, cert_path, image_path, password]):
         print("Skipping signing due to missing information.")
         return
 
     try:
         # Define signature box coordinates (x1, y1, x2, y2) from bottom-left
-        single_page_box = (435, 72, 540, 105)
+        single_page_box_coords = (435, 72, 540, 105)
         date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'')
 
         with open(key_path, 'rb') as f:
@@ -79,35 +82,47 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
 
         reader = PdfReader(pdf_path)
         page_count = len(reader.pages)
-        signed_data_obj = b''
-
+        
+        # 1. Build a list of signature boxes, one for each page.
+        # The format is (page_number, x1, y1, x2, y2)
+        all_signature_boxes = []
         for i in range(page_count):
-            print(f"Signing page {i + 1}/{page_count}...")
-            signdata = {
-                'sigflags': 3,
-                'contact': 'faculty.email@example.com',
-                'location': 'Manipal, India',
-                'reason': 'I am the author of this document',
-                'signaturebox': single_page_box,
-                'signature_img': image_path,
-                'signingdate': date,
-                'page': i
-            }
-            # The signed data object grows with each page
-            signed_data_obj += pdf.cms.sign(
-                pdf_data_initial,
-                signdata,
-                key=private_key,
-                cert=certificate,
-                othercerts=()
-            )
+            # Appends a tuple like (0, 435, 72, 540, 105), then (1, 435, 72, 540, 105), etc.
+            all_signature_boxes.append( (i, *single_page_box_coords) ) 
 
-        # Append the accumulated signatures to the original PDF data
+        # 2. Define the signdata dictionary ONCE.
+        # We use the 'signatureboxes' (plural) key instead of the loop.
+        signdata = {
+            'sigflags': 3,
+            'contact': 'faculty.email@example.com',
+            'location': 'Manipal, India',
+            'reason': 'I am the author of this document',
+            
+            # This is the key change:
+            'signatureboxes': all_signature_boxes, 
+            
+            'signature_img': image_path,
+            'signingdate': date,
+        }
+
+        print(f"Applying ONE digital signature with {page_count} visual appearances...")
+
+        # 3. Call pdf.cms.sign only ONCE, outside any loop.
+        signed_data_obj = pdf.cms.sign(
+            pdf_data_initial,
+            signdata,
+            key=private_key,
+            cert=certificate,
+            othercerts=()
+        )
+
+        # 4. Append the single signature object to the original data
         final_pdf_data = pdf_data_initial + signed_data_obj
+        
         with open(pdf_path, 'wb') as f_out:
             f_out.write(final_pdf_data)
 
-        print(f"\nSuccess! Successfully signed all {page_count} pages of '{pdf_path}' ✨")
+        print(f"\nSuccess! Successfully signed '{pdf_path}' with visuals on all {page_count} pages. ✨")
 
     except Exception:
         print(f"\nCRITICAL ERROR: Failed to sign the PDF.")
@@ -121,6 +136,46 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
 # ==============================================================================
 class DataReader:
     """Reads data from an Excel or CSV file and returns it in a neutral format."""
+
+    # --- UPDATED Column Mapping ---
+    COLUMN_MAPPING = {
+        # --- Mappings from your file ---
+        'Roll Number': 'Register Number of the Student',
+        'Student Name': 'Student Name',
+        'Total (30) *': 'Midterm Exam Marks (Out of 30)',
+
+        # --- Mappings for other potential columns ---
+        'CGPA': 'CGPA (up to previous semester)',
+        'Actions': 'Actions taken to improve performance',
+        'Outcome': 'Outcome (Based on clearance in end-semester or makeup exam)',
+        'Remarks': 'Remarks if any',
+        'Sem': 'Semester',
+        'Subject': 'Subject Name'
+    }
+
+    # --- UPDATED Subject Header Extractor ---
+    def _extract_subject_from_header(self, file_path):
+        """
+        Attempts to read the subject name from cell B1 of the Excel file.
+        """
+        try:
+            wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+            sheet = wb.active
+            
+            # Data is in cell B1, e.g., "Exam: ... / COMPUTER NETWORKS [CSE 3124]"
+            subject_name_raw = sheet['B1'].value
+            
+            if subject_name_raw:
+                # Get the last part after the final '/'
+                subject_name = str(subject_name_raw).split('/')[-1].strip()
+                # Optional: clean up brackets if they exist
+                subject_name = subject_name.split('[')[0].strip()
+                return subject_name
+            return None
+        except Exception as e:
+            print(f"Warning: Could not auto-detect subject name from file header. Error: {e}")
+            return None
+
     def read_data(self, file_path):
         """Reads the Excel file, returning both the data and the subject name."""
         subject_name = self._extract_subject_from_header(file_path)
@@ -128,18 +183,24 @@ class DataReader:
             subject_name = input("Could not auto-detect subject. Please enter Subject Name manually: ")
 
         try:
-            df = pd.read_excel(file_path, skiprows=2)
+            # --- UPDATED skiprows to 1 ---
+            df = pd.read_excel(file_path, skiprows=1)
+            
             df.columns = df.columns.str.strip()
             df.rename(columns=self.COLUMN_MAPPING, inplace=True)
 
             required_cols = ['Register Number of the Student', 'Student Name', 'Midterm Exam Marks (Out of 30)']
-            if not all(col in df.columns for col in required_cols):
-                print(f"Error: The file is missing one of the required columns: {required_cols}")
+            
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"\n--- CRITICAL ERROR ---")
+                print(f"Error: The Excel file is missing required columns.")
+                print(f"Missing: {missing_cols}")
+                print(f"Please ensure your Excel headers match the keys in COLUMN_MAPPING.")
+                print(f"Found headers: {list(df.columns)}")
+                print("----------------------\n")
                 return None, None
 
-            # --- FIX: Ensure Registration Number is a string without decimals ---
-            # Pandas often reads numeric columns as floats. This converts them to strings
-            # and removes the trailing '.0' if it exists.
             reg_col = 'Register Number of the Student'
             df[reg_col] = df[reg_col].astype(str).str.replace(r'\.0$', '', regex=True)
 
@@ -149,6 +210,7 @@ class DataReader:
             return None, None
         except Exception as e:
             print(f"An error occurred while reading the data file: {e}")
+            traceback.print_exc()
             return None, None
 
 # ==============================================================================
@@ -206,6 +268,10 @@ class PdfWriter:
 class BaseFormatter:
     """Base class for all formatters with shared helper methods."""
     COMIC_SANS = "Brush Script MT Italic"
+    
+    # --- ADDED Font Name ---
+    FONT_NAME = "Times New Roman" 
+
     def get_year_semester_string(self, roman_numeral):
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
 
@@ -376,30 +442,58 @@ class StudentDataProcessor:
             return (float(marks) / MIDTERM_TOTAL_MARKS) * 100
         except (ValueError, TypeError):
             return 0
-    def process_data(self, all_student_data):
+            
+    # --- UPDATED process_data method ---
+    def process_data(self, all_student_data, common_comment, subject_name, semester):
+        """
+        Processes student data, calculates percentages, and adds common actions.
+        """
+        learner_action_key = 'Actions taken to improve performance'
+        
         for student in all_student_data:
-            student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
-            student['Subject Name'] = str(student.get('Subject Name', '')).strip().lower()
-            student['Semester'] = str(student.get('Semester', '')).strip().lower()
+            student['MidtermPercentage'] = self._calculate_midterm_percentage(
+                student.get('Midterm Exam Marks (Out of 30)')
+            )
+            
+            # --- FIX: Manually inject subject and semester ---
+            student['Subject Name'] = subject_name
+            student['Semester'] = semester
+            
+            # --- Logic to add the common comment ---
+            if common_comment:
+                existing_actions = str(student.get(learner_action_key, '')).strip()
+                if existing_actions:
+                    # Append if actions already exist
+                    student[learner_action_key] = f"{existing_actions}; {common_comment}"
+                else:
+                    # Set if no actions exist
+                    student[learner_action_key] = common_comment
+                    
         return all_student_data
+        
     def filter_students(self, students, semester, subject, learner_type, slow_thresh, fast_thresh):
+        # Filter by course/semester is now redundant since it's injected,
+        # but we keep it for potential future use cases.
         filtered_by_course = [
             s for s in students if
             (semester == 'all' or s['Semester'] == semester) and
             (subject == 'all' or s['Subject Name'] == subject)
         ]
+        
         if learner_type == 'slow':
             final_filtered = [s for s in filtered_by_course if s['MidtermPercentage'] <= slow_thresh]
         else:
             final_filtered = [s for s in filtered_by_course if s['MidtermPercentage'] >= fast_thresh]
+            
         if subject == 'all':
             final_filtered.sort(key=lambda s: (s.get('Subject Name', ''), s.get('Register Number of the Student', '')))
         else:
             final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
+            
         return final_filtered
 
 # ==============================================================================
-# 6. CONTROLLER
+# 7. CONTROLLER
 # ==============================================================================
 class ReportController:
     def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
@@ -419,18 +513,30 @@ class ReportController:
 
     def run(self):
         all_student_data, detected_subject = self.reader.read_data(self.excel_path)
-        if not all_student_data: return
+        if not all_student_data:
+            return
+        
+        # Use auto-detected subject. self.semester is from user input
         self.subject = detected_subject.lower().strip()
 
-        processed_students = self.processor.process_data(all_student_data, self.subject, self.semester, self.common_comment)
+        # --- UPDATED call to process_data ---
+        processed_students = self.processor.process_data(
+            all_student_data, self.common_comment, self.subject, self.semester
+        )
         
+        # Now we filter based on the data we just injected
         final_filtered_students = self.processor.filter_students(
-            processed_students, 'all', 'all', self.learner_type,
-            self.slow_threshold, self.fast_threshold
+            processed_students,
+            self.semester,  # Use the semester from user input
+            self.subject,   # Use the subject from the file header
+            self.learner_type,
+            self.slow_threshold,
+            self.fast_threshold
         )
         
         if not final_filtered_students:
             print(f"\nNo students found for the selected criteria.")
+            print(f"(Semester: '{self.semester}', Subject: '{self.subject}', Type: '{self.learner_type}')")
             return
 
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
@@ -439,11 +545,10 @@ class ReportController:
         date_str = datetime.now().strftime('%d_%m_%y')
         base_dir = "Learner Monitor Reports"
         learner_folder = f"{self.learner_type.title()} Learners"
-        semester_name_for_file = self.semester.upper()
         
-        # Sanitize subject name to be used in file paths
+        semester_name_for_file = self.semester.upper()
         subject_name_for_file = self.subject.replace(' ', '_').title()
-        subject_name_for_file = re.sub(r'[\\/*?:"<>|]',"", subject_name_for_file) # Remove illegal chars
+        subject_name_for_file = re.sub(r'[\\/*?:"<>|]', "", subject_name_for_file) # Remove illegal chars
 
         output_dir = os.path.join(base_dir, learner_folder, f"Semester_{semester_name_for_file}", subject_name_for_file)
         os.makedirs(output_dir, exist_ok=True)
@@ -487,6 +592,8 @@ def get_valid_input(prompt, valid_options=None, input_type=str):
         if not user_input and input_type is not str:
              print("This field cannot be empty.")
              continue
+        if not user_input and input_type is str:
+             return user_input # Allow empty string for manual subject input
         try:
             converted_input = input_type(user_input)
             if valid_options and str(converted_input) not in valid_options:
@@ -506,7 +613,11 @@ if __name__ == "__main__":
         print(f"Error: The file '{excel_file}' does not exist.")
         exit()
     
-    semester_filter = input("Enter Semester (e.g., 'III', 'V', etc.): ")
+    semester_filter = get_valid_input("Enter Semester (e.g., 'III', 'V', etc.): ", input_type=str)
+    if not semester_filter:
+        print("Error: Semester cannot be empty.")
+        exit()
+
     output_format = get_valid_input("Choose output format ('word' or 'pdf'): ", ['word', 'pdf'])
     learner = get_valid_input("Generate report for 'fast' or 'slow' learners? ", ['fast', 'slow'])
     
@@ -545,4 +656,3 @@ if __name__ == "__main__":
     
     print("\nReport generation process finished.")
     input("Press Enter to exit.")
-
