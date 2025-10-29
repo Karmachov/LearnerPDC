@@ -22,6 +22,12 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
+from PyPDF2 import PdfReader, PdfWriter
+import io
+
 MIDTERM_TOTAL_MARKS=30
 
 # Suppress a known warning from PyPDF2
@@ -61,143 +67,72 @@ SEMESTER_MAPPING = {
 # ==============================================================================
 # 1. PDF SIGNING UTILITY
 # ==============================================================================
-def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
-    """
-    Signs a PDF with one digital signature and places
-    a visible signature appearance on every page.
-    """
+def add_visible_signature(input_pdf_path, signature_image_path):
+    reader = PdfReader(input_pdf_path)
+    writer = PdfWriter()
 
-    if not all([pdf_path, key_path, cert_path, image_path, password]):
-        print("Skipping signing due to missing information.")
-        return
+    for page in reader.pages:
+        packet = io.BytesIO()
+        can = canvas.Canvas(packet, pagesize=letter)
 
+        # ✅ Bottom-Right placement
+        x = 400  # adjust if needed
+        y = 20   # adjust if needed
+
+        signature_img = ImageReader(signature_image_path)
+        can.drawImage(signature_img, x, y, width=150, height=50, mask='auto')
+        can.save()
+
+        packet.seek(0)
+        overlay_pdf = PdfReader(packet)
+        overlay_page = overlay_pdf.pages[0]
+
+        page.merge_page(overlay_page)
+        writer.add_page(page)
+
+    output_bytes = io.BytesIO()
+    writer.write(output_bytes)
+    return output_bytes.getvalue()
+
+
+def digitally_sign_pdf(pdf_path, image_path, key_path, cert_path, password):
     try:
-        from datetime import datetime
-        import io
-        import traceback
-        from PIL import Image
-        from PyPDF2 import PdfReader, PdfWriter
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import letter
-        from reportlab.lib.utils import ImageReader
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-        from cryptography.x509 import load_pem_x509_certificate
-        from endesive import pdf
+        # Load key and certificate
+        with open(key_path, "rb") as f:
+            private_key = load_pem_private_key(f.read(), password=password.encode())
 
-        # Signing timestamp
-        date = datetime.now().strftime("D:%Y%m%d%H%M%S+05'30'")
-
-        # Load private key and certificate
-        with open(key_path, 'rb') as f:
-            private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
-        with open(cert_path, 'rb') as f:
+        with open(cert_path, "rb") as f:
             certificate = load_pem_x509_certificate(f.read())
 
-        # Read full original PDF once
-        with open(pdf_path, 'rb') as f_in:
-            pdf_data_initial = f_in.read()
+        # ✅ Step 1: Visible signature on each page
+        updated_pdf_bytes = add_visible_signature(pdf_path, image_path)
 
-        reader = PdfReader(pdf_path)
-        writer = PdfWriter()
-        page_count = len(reader.pages)
-
-        # Load signature image
-        with open(image_path, 'rb') as f_img:
-            image_data = f_img.read()
-
-        # Read image size
-        with Image.open(io.BytesIO(image_data)) as img:
-            img_width, img_height = img.size
-
-        # Convert pixels to PDF points
-        scale_factor = 0.75
-        sig_width = img_width * scale_factor / 1.33
-        sig_height = img_height * scale_factor / 1.33
-
-        # Create signature box per page
-        signatureboxes = []
-        for page_index in range(page_count):
-            page = reader.pages[page_index]
-            page_width = float(page.mediabox.width)
-
-            x2 = page_width - 50
-            y2 = 50 + sig_height
-            x1 = x2 - sig_width
-            y1 = 50
-
-            signatureboxes.append((page_index, x1, y1, x2, y2))
-
-        # Draw signature appearance on PDF pages
-        def add_signature_to_page(page, sig_coords):
-            packet = io.BytesIO()
-            can = canvas.Canvas(packet, pagesize=letter)
-
-            x1, y1, x2, y2 = sig_coords
-            sig_w = x2 - x1
-            sig_h = y2 - y1
-
-            signature_img = ImageReader(image_path)
-            can.drawImage(signature_img, x1, y1, sig_w, sig_h, mask='auto')
-
-            can.save()
-            packet.seek(0)
-
-            overlay_pdf = PdfReader(packet)
-            overlay_page = overlay_pdf.pages[0]
-            page.merge_page(overlay_page)
-            return page
-
-        # Apply visible signature image
-        for (page_idx, x1, y1, x2, y2) in signatureboxes:
-            page = reader.pages[page_idx]
-            signed_page = add_signature_to_page(page, (x1, y1, x2, y2))
-            writer.add_page(signed_page)
-
-        # Save the visually signed PDF to a buffer
-        buffer = io.BytesIO()
-        writer.write(buffer)
-        buffer.seek(0)
-        updated_pdf_bytes = buffer.getvalue()
-
-        # Prepare metadata for cryptographic signing
+        # ✅ Step 2: Add real digital signature
         signdata = {
             "sigflags": 3,
-            "contact": "faculty.email@example.com",
-            "location": "Manipal, India",
-            "reason": "I am the author of this document",
-            "signatureboxes": signatureboxes,
-            "appearance": {
-                "image": image_data,
-                "fit": "stretch"
-            },
-            "signingdate": date
+            "contact": "contact@example.com",
+            "location": "India",
+            "signingdate": datetime.utcnow().strftime("D:%Y%m%d%H%M%S+00'00'")
         }
 
-        print(f"Signing PDF with one digital signature and {page_count} visible marks.")
-
-        # Apply cryptographic signature
-        # TEMP: Write the visually signed PDF ONLY
-        with open("temp_visually_signed.pdf", "wb") as f:
-            f.write(updated_pdf_bytes)
-            print("Saved temp PDF without digital signature")
-            return
-
+        signed_pdf_bytes = pdf.cms.sign(
             updated_pdf_bytes,
             signdata,
             key=private_key,
             cert=certificate,
             othercerts=[certificate]
-        
+        )
 
-        # Write signed output
+        # ✅ Step 3: Save final signed file
         with open(pdf_path, "wb") as f_out:
             f_out.write(signed_pdf_bytes)
 
-        print("Success. Signed file saved:", pdf_path)
+        print("✅ Success! Visible + Digital Signature Saved:", pdf_path)
 
     except Exception:
-        print("Signing process failed.")
+        print("❌ Signing failed.")
         traceback.print_exc()
+
 
 # ==============================================================================
 # 2. DATA READER
@@ -316,7 +251,7 @@ class PdfWriter:
             if sign_info and sign_info.get('should_sign'):
                 if format_choice in ['1', '2', '4', '5']:
                     print("Proceeding to sign the PDF...")
-                    sign_pdf(
+                    digitally_sign_pdf(
                         pdf_path=output_filename,
                         key_path=sign_info['key_path'],
                         cert_path=sign_info['cert_path'],
