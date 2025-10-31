@@ -67,6 +67,19 @@ from PyPDF2 import PdfReader
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
 from endesive import pdf
+import fitz
+
+def add_image_to_all_pages_fitz(pdf_path, image_path, x=450, y=50, width=100, height=40):
+    """Adds an image to every page using PyMuPDF."""
+    doc = fitz.open(pdf_path)
+    for page in doc:
+        page.insert_image(
+            fitz.Rect(x, y, x + width, y + height),
+            filename=image_path
+        )
+    doc.saveIncr()  # saves changes without recreating file
+    print(f"✅ Image added to all pages using PyMuPDF: {pdf_path}")
+
 
 
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
@@ -127,14 +140,13 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         with open(pdf_path, 'wb') as f:
             f.write(pdf_data + signed_pdf_bytes)
 
-        print(f"\n✅ Success! PDF digitally signed on page 1 only.\n")
-
+        print("\n✅ Success! PDF digitally signed on page 1 only.\n")
+        return True
     except Exception:
         print("\n❌ Failed to sign the PDF.")
-        print("Please check key, certificate, and password.")
-        print("----- Full Error Details -----")
         traceback.print_exc()
-        print("------------------------------")
+        return False
+
 
 
 # ==============================================================================
@@ -220,13 +232,31 @@ class DataReader:
 # 3. DATA PROCESSOR
 # ==============================================================================
 class DocxWriter:
-    """Takes a Document object and saves it to a .docx file."""
+    """Takes a python-docx Document object and saves it to a .docx file."""
+
     def write(self, doc, output_filename, **kwargs):
+        """
+        Saves the given Document object to a .docx file.
+
+        Parameters:
+            doc (Document): The python-docx Document object to save.
+            output_filename (str): The name/path of the output .docx file.
+            **kwargs: Optional keyword arguments for future extensibility.
+        """
         try:
+            # Attempt to save the document
             doc.save(output_filename)
-            print(f"\nSuccess! Report generated as '{output_filename}' ✨")
+            print(f"\n✅ Success! Report generated as '{output_filename}' ✨")
+
+        except PermissionError:
+            print(f"\n❌ Error: Permission denied while trying to save '{output_filename}'.")
+            print("Please close the file if it’s open in Word or another program, then try again.")
+
+        except FileNotFoundError:
+            print(f"\n❌ Error: Invalid path. Could not save the file to '{output_filename}'.")
+
         except Exception as e:
-            print(f"\nError: Could not save the file. Details: {e}")
+            print(f"\n❌ Error: Could not save the file. Details: {e}")
 
 class PdfWriter:
     """Creates a DOCX, converts it to PDF, and optionally signs it."""
@@ -236,6 +266,7 @@ class PdfWriter:
             return
 
         try:
+            # --- Step 1: Convert DOCX → PDF ---
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_docx = os.path.join(temp_dir, "temp_report.docx")
                 doc.save(temp_docx)
@@ -243,26 +274,39 @@ class PdfWriter:
 
             time.sleep(2)
 
-            if platform.system() == "Darwin":
+            if platform.system() == "Darwin":  # macOS workaround
                 time.sleep(1)
 
-            print(f"\nSuccess! PDF generated as '{output_filename}' ✨")
+            print(f"\n✅ Success! PDF generated as '{output_filename}' ✨")
 
+            # --- Step 2: Digital Signature (if required) ---
             if sign_info and sign_info.get('should_sign'):
                 if format_choice in ['1', '2', '4', '5']:
                     print("Proceeding to sign the PDF...")
-                    sign_pdf(
+                    success = sign_pdf(
                         pdf_path=output_filename,
                         key_path=sign_info['key_path'],
                         cert_path=sign_info['cert_path'],
                         image_path=sign_info['image_path'],
                         password=sign_info['password']
                     )
-                else:
-                    print("Skipping signature for Format 3 (Summary Report).")
+
+                    # ✅ Step 3: Only add image to all pages if signature succeeded
+                    if success:
+                        print("Adding image to all pages (since signature succeeded)...")
+                        add_image_to_all_pages_fitz(
+                            output_filename,
+                            sign_info['image_path'],
+                            x=435,  # adjust placement if needed
+                            y=72,
+                            width=100,
+                            height=40
+                        )
+                    else:
+                        print("Skipping image overlay due to signing failure.")
 
         except Exception as e:
-            print(f"\nError: Could not save or convert the file. Details: {e}")
+            print(f"\n❌ Error: Could not save or convert the file. Details: {e}")
             print("Please ensure Microsoft Word (on Windows) or LibreOffice (on macOS/Linux) is installed and accessible.")
 
 # ==============================================================================
