@@ -22,12 +22,6 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import ImageReader
-from PyPDF2 import PdfReader, PdfWriter
-import io
-
 MIDTERM_TOTAL_MARKS=30
 
 # Suppress a known warning from PyPDF2
@@ -67,71 +61,80 @@ SEMESTER_MAPPING = {
 # ==============================================================================
 # 1. PDF SIGNING UTILITY
 # ==============================================================================
-def add_visible_signature(input_pdf_path, signature_image_path):
-    reader = PdfReader(input_pdf_path)
-    writer = PdfWriter()
-
-    for page in reader.pages:
-        packet = io.BytesIO()
-        can = canvas.Canvas(packet, pagesize=letter)
-
-        # ✅ Bottom-Right placement
-        x = 400  # adjust if needed
-        y = 20   # adjust if needed
-
-        signature_img = ImageReader(signature_image_path)
-        can.drawImage(signature_img, x, y, width=150, height=50, mask='auto')
-        can.save()
-
-        packet.seek(0)
-        overlay_pdf = PdfReader(packet)
-        overlay_page = overlay_pdf.pages[0]
-
-        page.merge_page(overlay_page)
-        writer.add_page(page)
-
-    output_bytes = io.BytesIO()
-    writer.write(output_bytes)
-    return output_bytes.getvalue()
+from datetime import datetime
+import traceback
+from PyPDF2 import PdfReader
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509 import load_pem_x509_certificate
+from endesive import pdf
 
 
-def digitally_sign_pdf(pdf_path, image_path, key_path, cert_path, password):
+def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
+    """
+    Digitally signs the PDF on the FIRST page only.
+    The digital signature applies to the entire document.
+    """
+
+    if not all([pdf_path, key_path, cert_path, image_path, password]):
+        print("Skipping signing due to missing information.")
+        return
+
     try:
-        # Load key and certificate
-        with open(key_path, "rb") as f:
-            private_key = load_pem_private_key(f.read(), password=password.encode())
+        # Define the visible signature box (x1, y1, x2, y2) on FIRST page
+        signature_box = (435, 72, 540, 105)  # Adjust as needed
 
-        with open(cert_path, "rb") as f:
+        # Timestamp in PDF format
+        date = datetime.now().strftime("D:%Y%m%d%H%M%S+05'30'")
+
+        # Load private key and certificate
+        with open(key_path, 'rb') as f:
+            private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
+
+        with open(cert_path, 'rb') as f:
             certificate = load_pem_x509_certificate(f.read())
 
-        # ✅ Step 1: Visible signature on each page
-        updated_pdf_bytes = add_visible_signature(pdf_path, image_path)
+        # Read PDF bytes
+        with open(pdf_path, 'rb') as f:
+            pdf_data = f.read()
 
-        # ✅ Step 2: Add real digital signature
+        # Confirm page count (optional)
+        reader = PdfReader(pdf_path)
+        page_count = len(reader.pages)
+        print(f"PDF has {page_count} pages. Applying digital signature on page 1 only.")
+
+        # Metadata for signature
         signdata = {
-            "sigflags": 3,
-            "contact": "contact@example.com",
-            "location": "India",
-            "signingdate": datetime.utcnow().strftime("D:%Y%m%d%H%M%S+00'00'")
+            'sigflags': 3,
+            'contact': 'faculty.email@example.com',
+            'location': 'Manipal, India',
+            'reason': 'I am the author of this document',
+            'signaturebox': signature_box,
+            'signature_img': image_path,
+            'signingdate': date,
+            'page': 0,  # 0 = first page
         }
 
+        # Apply a single digital signature
         signed_pdf_bytes = pdf.cms.sign(
-            updated_pdf_bytes,
+            pdf_data,
             signdata,
             key=private_key,
             cert=certificate,
-            othercerts=[certificate]
+            othercerts=(),
         )
 
-        # ✅ Step 3: Save final signed file
-        with open(pdf_path, "wb") as f_out:
-            f_out.write(signed_pdf_bytes)
+        # Write final signed PDF
+        with open(pdf_path, 'wb') as f:
+            f.write(pdf_data + signed_pdf_bytes)
 
-        print("✅ Success! Visible + Digital Signature Saved:", pdf_path)
+        print(f"\n✅ Success! PDF digitally signed on page 1 only.\n")
 
     except Exception:
-        print("❌ Signing failed.")
+        print("\n❌ Failed to sign the PDF.")
+        print("Please check key, certificate, and password.")
+        print("----- Full Error Details -----")
         traceback.print_exc()
+        print("------------------------------")
 
 
 # ==============================================================================
@@ -158,9 +161,6 @@ class DataReader:
 
     # --- UPDATED Subject Header Extractor ---
     def _extract_subject_from_header(self, file_path):
-        """
-        Attempts to read the subject name from cell B1 of the Excel file.
-        """
         try:
             wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
             sheet = wb.active
@@ -251,7 +251,7 @@ class PdfWriter:
             if sign_info and sign_info.get('should_sign'):
                 if format_choice in ['1', '2', '4', '5']:
                     print("Proceeding to sign the PDF...")
-                    digitally_sign_pdf(
+                    sign_pdf(
                         pdf_path=output_filename,
                         key_path=sign_info['key_path'],
                         cert_path=sign_info['cert_path'],
