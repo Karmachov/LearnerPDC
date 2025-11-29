@@ -2,7 +2,7 @@ import os
 import traceback
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
-from logic import ReportController # Import the controller from our logic file
+from logic import ReportController  # Import the controller from our logic file
 
 app = Flask(__name__)
 
@@ -23,6 +23,7 @@ def generate_report():
     and return the generated file.
     """
     try:
+        # 1. Basic File Validation
         if 'excelFile' not in request.files:
             return jsonify({"error": "No Excel file part in the request."}), 400
         
@@ -30,7 +31,7 @@ def generate_report():
         if excel_file.filename == '':
             return jsonify({"error": "No selected Excel file."}), 400
 
-        # Safely get form data
+        # 2. Retrieve Basic Form Data
         semester = request.form.get('semester')
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
@@ -39,16 +40,58 @@ def generate_report():
         format_choice = request.form.get('formatChoice')
         output_type = request.form.get('outputType')
 
+        # Validate required text fields
         if not all([semester, learner_type, comment, slow_thresh_str, fast_thresh_str, format_choice, output_type]):
             return jsonify({"error": "Missing form data. Please fill out all fields."}), 400
 
-        slow_thresh = float(slow_thresh_str)
-        fast_thresh = float(fast_thresh_str)
+        # Convert numerical thresholds
+        try:
+            slow_thresh = float(slow_thresh_str)
+            fast_thresh = float(fast_thresh_str)
+        except ValueError:
+             return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
+        # 3. Save the Excel File
         filename = secure_filename(excel_file.filename)
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
+        # 4. Handle Digital Signature Logic
+        sign_info = {'should_sign': False}
+        
+        # Check if signing is enabled (checkbox in frontend sends 'on' if checked)
+        if request.form.get('enableSigning') == 'on':
+            # Retrieve signature assets
+            key_file = request.files.get('keyFile')
+            cert_file = request.files.get('certFile')
+            img_file = request.files.get('imageFile')
+            password = request.form.get('keyPassword')
+
+            # Ensure all signing components are present
+            if all([key_file, cert_file, img_file, password]):
+                # Save assets securely
+                key_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(key_file.filename))
+                cert_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(cert_file.filename))
+                img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
+                
+                key_file.save(key_path)
+                cert_file.save(cert_path)
+                img_file.save(img_path)
+
+                # Update sign_info dictionary
+                sign_info = {
+                    'should_sign': True,
+                    'key_path': key_path,
+                    'cert_path': cert_path,
+                    'image_path': img_path,
+                    'password': password
+                }
+            else:
+                # If user checked the box but missed a file, you might want to warn them.
+                # For now, we return an error to ensure they provide everything.
+                return jsonify({"error": "Digital Signing is enabled but missing keys, certificates, or password."}), 400
+
+        # 5. Initialize Controller
         controller = ReportController(
             excel_path=excel_path,
             format_choice=format_choice,
@@ -57,12 +100,14 @@ def generate_report():
             fast_thresh=fast_thresh,
             output_type=output_type,
             semester=semester,
-            sign_info={'should_sign': False}, # Signing is not supported in this UI
+            sign_info=sign_info,  # Pass the dynamic sign_info here
             common_comment=comment
         )
 
+        # 6. Run Generation
         output_path = controller.run()
 
+        # 7. Return Result
         if output_path and os.path.exists(output_path):
             return send_file(output_path, as_attachment=True)
         else:
@@ -77,4 +122,3 @@ def generate_report():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
