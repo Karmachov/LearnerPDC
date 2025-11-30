@@ -323,7 +323,7 @@ class PdfWriter:
                 add_image_to_all_pages_fitz(
                     output_filename,
                     sign_info['image_path'],
-                    x=435, y=72, width=100, height=40 # Adjust coordinates as needed
+                    x=400, y=600, width=100, height=40 # Adjust coordinates as needed
                 )
 
             # 3. Cryptographic Signature (Page 1)
