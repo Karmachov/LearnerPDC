@@ -3,6 +3,7 @@ import traceback
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
 from logic import ReportController  # Import the controller from our logic file
+import time
 
 app = Flask(__name__)
 
@@ -106,12 +107,27 @@ def generate_report():
 
         # 6. Run Generation
         output_path = controller.run()
+        print("DEBUG: controller.run() returned:", output_path)
+        if isinstance(output_path, list):
+            for p in output_path:
+                print("DEBUG: produced file exists?", p, os.path.exists(p))
+
 
         # 7. Return Result
+        if isinstance(output_path, list):
+            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for fpath in output_path:
+                    if os.path.exists(fpath):
+                        zf.write(fpath, arcname=os.path.basename(fpath))
+            return send_file(os.path.abspath(zip_path), as_attachment=True)
+
+# else single file (string)
         if output_path and os.path.exists(output_path):
-            return send_file(output_path, as_attachment=True)
-        else:
-            return jsonify({"error": "No students found for the criteria, or report could not be generated."}), 404
+            return send_file(os.path.abspath(output_path), as_attachment=True)
+
+        return jsonify({"error": "No report generated."}), 404
 
     except ValueError as ve:
         traceback.print_exc()
@@ -121,4 +137,4 @@ def generate_report():
         return jsonify({"error": f"An unexpected server error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5001, threaded=False)

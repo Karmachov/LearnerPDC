@@ -360,59 +360,154 @@ def get_formatter(format_choice):
     return formatter
 
 # --- CONTROLLER ---
+# --- Replace the ReportController.run and _generate_all_formats with this version ---
+
 class ReportController:
     def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
-        self.excel_path = excel_path; self.format_choice = format_choice; self.learner_type = learner_type
-        self.slow_threshold = slow_thresh; self.fast_threshold = fast_thresh; self.output_type = output_type
-        self.subject = ""; self.semester = semester.lower().strip(); self.sign_info = sign_info
-        self.common_comment = common_comment; self.reader = DataReader(); self.processor = StudentDataProcessor()
-        self.writer = get_writer(output_type)
-        
+        self.excel_path = excel_path
+        self.format_choice = format_choice
+        self.learner_type = learner_type
+        self.slow_threshold = slow_thresh
+        self.fast_threshold = fast_thresh
+        self.output_type = output_type
+        self.subject = ""
+        self.semester = semester.lower().strip()
+        self.sign_info = sign_info
+        self.common_comment = common_comment
+        self.reader = DataReader()
+        self.processor = StudentDataProcessor()
+        # Do not set a single writer here
+
     def run(self):
         all_student_data, detected_subject = self.reader.read_data(self.excel_path)
-        if not all_student_data: return None
-        
+        if not all_student_data:
+            return None
+
         self.subject = detected_subject.lower().strip()
         processed_students = self.processor.process_data(all_student_data, self.subject, self.semester, self.common_comment)
         final_filtered_students = self.processor.filter_students(processed_students, self.learner_type, self.slow_threshold, self.fast_threshold)
-        
+
         if not final_filtered_students:
             print(f"\nNo students found for the selected criteria.")
             return None
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
-        
-        date_str = datetime.now().strftime('%d_%m_%y'); base_dir = "Learner_Monitor_Reports"
-        learner_folder = f"{self.learner_type.title()}_Learners"; sem_name = self.semester.upper()
+
+        date_str = datetime.now().strftime('%d_%m_%y')
+        base_dir = "Learner_Monitor_Reports"
+        learner_folder = f"{self.learner_type.title()}_Learners"
+        sem_name = self.semester.upper()
         subj_name = re.sub(r'[\\/*?:"<>|]', "", self.subject.replace(' ', '_').title())
         output_dir = os.path.join(base_dir, learner_folder, f"Semester_{sem_name}", subj_name)
         os.makedirs(output_dir, exist_ok=True)
-        
+
+        # If '5' denotes 'all formats'
         if self.format_choice == '5':
             return self._generate_all_formats(final_filtered_students, output_dir, date_str, sem_name, subj_name)
-        
+
+        # create document object using formatter
         formatter = get_formatter(self.format_choice)
         output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
-        ext = 'docx' if self.output_type == 'word' else 'pdf'
+
+        # Normalize requested output types
+        requested = self._normalize_output_types(self.output_type)
+        print("DEBUG: requested output types:", requested)
+        generated_paths = []
+
+        # Use a deterministic base filename so docx/pdf won't clobber each other
         report_name = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}.get(self.format_choice, "Report")
-        output_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{ext}'
-        full_output_path = os.path.join(output_dir, output_filename)
-        
-        self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
-        return full_output_path
-    
+        base_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}'
+
+        # Always write DOCX first if any output requested (reliable)
+        docx_path = os.path.join(output_dir, base_filename + ".docx")
+        DocxWriter().write(output_object, docx_path)
+        if 'word' in requested:
+            generated_paths.append(docx_path)
+            print(f"DEBUG: Saved DOCX at {docx_path}")
+
+        # If PDF requested, convert the saved DOCX to PDF (docx2pdf required)
+        if 'pdf' in requested:
+            pdf_path = os.path.join(output_dir, base_filename + ".pdf")
+            if convert is None:
+                print("WARNING: docx2pdf not installed; cannot create PDF automatically.")
+            else:
+                try:
+                    convert(docx_path, pdf_path)
+                    time.sleep(0.5)
+                    if os.path.exists(pdf_path):
+                        generated_paths.append(pdf_path)
+                        print(f"DEBUG: Created PDF at {pdf_path}")
+                    else:
+                        print("ERROR: PDF conversion finished but file missing:", pdf_path)
+                except Exception as e:
+                    print("ERROR: PDF conversion failed:", e)
+                    traceback.print_exc()
+
+        # Return single string for one file, list for multiple (Flask handles both)
+        if len(generated_paths) == 1:
+            return generated_paths[0]
+        return generated_paths
+
     def _generate_all_formats(self, students, output_dir, date_str, sem_name, subj_name):
-        ext = 'docx' if self.output_type == 'word' else 'pdf'
-        
-        comb_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{ext}'
+        """
+        Generate both Combined (Format1+2) and Summary (Format3).
+        Write docx first, then pdf if requested. Return a list of generated file paths.
+        """
+        # Create document objects
         f1_2_formatter = Format1And2DocxFormatter()
         doc1 = f1_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        full_path1 = os.path.join(output_dir, comb_fname)
-        self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')
-        
-        summ_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{ext}'
+
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
-        full_path2 = os.path.join(output_dir, summ_fname)
-        self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
 
-        return full_path1
+        # Base names
+        base1 = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}'
+        base2 = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Summary_Report_{date_str}'
+
+        requested = self._normalize_output_types(self.output_type)
+        generated_paths = []
+
+        # Always write docx first for both docs
+        docx1 = os.path.join(output_dir, base1 + ".docx")
+        DocxWriter().write(doc1, docx1)
+        docx2 = os.path.join(output_dir, base2 + ".docx")
+        DocxWriter().write(doc2, docx2)
+
+        if 'word' in requested:
+            generated_paths.extend([docx1, docx2])
+
+        if 'pdf' in requested:
+            pdf1 = os.path.join(output_dir, base1 + ".pdf")
+            pdf2 = os.path.join(output_dir, base2 + ".pdf")
+            if convert is None:
+                print("WARNING: docx2pdf not installed; skipping PDF generation for all-formats.")
+            else:
+                try:
+                    convert(docx1, pdf1)
+                    convert(docx2, pdf2)
+                    time.sleep(0.5)
+                    if os.path.exists(pdf1): generated_paths.append(pdf1)
+                    if os.path.exists(pdf2): generated_paths.append(pdf2)
+                except Exception as e:
+                    print("ERROR: PDF conversion failed for all-formats:", e)
+                    traceback.print_exc()
+
+        return generated_paths
+
+    def _normalize_output_types(self, output_type):
+        if isinstance(output_type, (list, tuple)):
+            tokens = list(output_type)
+        elif isinstance(output_type, str):
+            lower = output_type.lower().strip()
+            if lower in ('both', 'all'):
+                tokens = ['pdf', 'word']
+            elif lower in ('pdf', 'word'):
+                tokens = [lower]
+            else:
+                parts = [p.strip().lower() for p in re.split(r'[,\s]+', lower) if p.strip()]
+                tokens = parts or ['pdf']
+        else:
+            tokens = ['pdf']
+        tokens = [t for t in dict.fromkeys(tokens) if t in ('pdf', 'word')]
+        if not tokens:
+            tokens = ['pdf']
+        return tokens
