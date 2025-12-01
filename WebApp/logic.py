@@ -54,23 +54,55 @@ SEMESTER_MAPPING = {
 }
 
 # --- PDF VISUAL HELPER ---
-def add_image_to_all_pages_fitz(pdf_path, image_path, x=450, y=50, width=100, height=40):
-    """Adds an image to every page using PyMuPDF (fitz) strictly for visual purposes."""
-    if not fitz:
-        print("Skipping image overlay: PyMuPDF not installed.")
-        return
-
+def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100, height=40):
+    """
+    Adds an image to pages.
+    Searches for 'Signature of the' -> 'Signature' -> Fallback to bottom right.
+    """
     try:
         doc = fitz.open(pdf_path)
+        modified = False
+        
         for page in doc:
-            page.insert_image(
-                fitz.Rect(x, y, x + width, y + height),
-                filename=image_path
-            )
-        doc.saveIncr() # Incremental save is usually faster/safer
-        print(f"Added visual header/image to all pages of {pdf_path}")
+            insert_rect = None
+            
+            # 1. Search for exact phrase
+            text_instances = page.search_for("Signature of the")
+            
+            # 2. Broader search
+            if not text_instances:
+                text_instances = page.search_for("Signature")
+
+            if text_instances:
+                text_rect = text_instances[-1]
+                # FIX: Use .x0 and .y0 instead of .x and .y
+                new_x = text_rect.x0-25
+                new_y = text_rect.y0 - height - 10
+                insert_rect = fitz.Rect(new_x, new_y, new_x + width, new_y + height)
+            
+            # 3. Explicit coordinates
+            elif x is not None and y is not None:
+                insert_rect = fitz.Rect(x, y, x + width, y + height)
+            
+            # 4. Fallback (Bottom Right)
+            else:
+                page_w = page.rect.width
+                page_h = page.rect.height
+                safe_x = page_w - width - 50 
+                safe_y = page_h - 150
+                insert_rect = fitz.Rect(safe_x, safe_y, safe_x + width, safe_y + height)
+
+            if insert_rect:
+                page.insert_image(insert_rect, filename=image_path, overlay=True)
+                modified = True
+
+        if modified:
+            doc.saveIncr()
+            print(f"Visual signature added to {os.path.basename(pdf_path)}")
+            
     except Exception as e:
-        print(f"Error adding image to PDF pages: {e}")
+        print(f"Error in visual signature: {e}")
+        traceback.print_exc()
 
 # --- PDF SIGNING UTILITY ---
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
@@ -318,12 +350,18 @@ class PdfWriter:
 
             # 2. Add Visuals (Header/Signature Image on ALL pages)
             # We do this BEFORE signing so the signature hash covers these edits.
+            # 2. Add Visuals (Header/Signature Image on ALL pages)
             if sign_info and sign_info.get('should_sign') and sign_info.get('image_path'):
                 print("Adding visual signature/header to all pages...")
+                
+                # CHANGE THIS CALL:
                 add_image_to_all_pages_fitz(
                     output_filename,
                     sign_info['image_path'],
-                    x=400, y=600, width=100, height=40 # Adjust coordinates as needed
+                    # Remove x and y arguments to trigger dynamic search
+                    # x=400, y=600, 
+                    width=100, 
+                    height=50 # Adjusted height slightly
                 )
 
             # 3. Cryptographic Signature (Page 1)
