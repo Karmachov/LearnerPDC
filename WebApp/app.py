@@ -109,7 +109,9 @@ def generate_report():
 
         # 7. Return Result
         if output_path and os.path.exists(output_path):
-            return send_file(output_path, as_attachment=True)
+            absolute_path = os.path.abspath(output_path)
+    
+            return send_file(absolute_path, as_attachment=True)
         else:
             return jsonify({"error": "No students found for the criteria, or report could not be generated."}), 404
 
