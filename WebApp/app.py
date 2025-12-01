@@ -125,9 +125,9 @@ def generate_report():
 
 # else single file (string)
         if output_path and os.path.exists(output_path):
-            return send_file(os.path.abspath(output_path), as_attachment=True)
-
-        return jsonify({"error": "No report generated."}), 404
+            return send_file(output_path, as_attachment=True)
+        else:
+            return jsonify({"error": "No students found for the criteria, or report could not be generated."}), 404
 
     except ValueError as ve:
         traceback.print_exc()
