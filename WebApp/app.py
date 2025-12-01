@@ -107,10 +107,43 @@ def generate_report():
 
         # 6. Run Generation
         output_path = controller.run()
-        print("DEBUG: controller.run() returned:", output_path)
+        # Normalize controller output
         if isinstance(output_path, list):
-            for p in output_path:
-                print("DEBUG: produced file exists?", p, os.path.exists(p))
+            output_path = [os.path.abspath(p) for p in output_path]
+        else:
+            output_path = os.path.abspath(output_path) if output_path else None
+
+        print("DEBUG: normalized output paths:", output_path)
+
+# If list -> zip them
+        if isinstance(output_path, list):
+            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for fpath in output_path:
+                    if os.path.exists(fpath):
+                        zf.write(fpath, arcname=os.path.basename(fpath))
+                    else:
+                        print("WARNING: expected file missing when zipping:", fpath)
+            return send_file(os.path.abspath(zip_path), as_attachment=True)
+
+# single file
+        if output_path and os.path.exists(output_path):
+            return send_file(output_path, as_attachment=True)
+        else:
+    # helpful debugging listing
+            parent = os.path.dirname(output_path) if output_path else app.config['UPLOAD_FOLDER']
+            listing = []
+            try:
+                listing = os.listdir(parent)
+            except Exception as _:
+                listing = ["(couldn't list parent dir)"]
+            return jsonify({
+                "error": "file_not_found",
+                "expected_path": output_path,
+                "parent_listing_sample": listing[:50]
+            }), 500
+
 
 
         # 7. Return Result

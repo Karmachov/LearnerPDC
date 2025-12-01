@@ -54,23 +54,55 @@ SEMESTER_MAPPING = {
 }
 
 # --- PDF VISUAL HELPER ---
-def add_image_to_all_pages_fitz(pdf_path, image_path, x=450, y=50, width=100, height=40):
-    """Adds an image to every page using PyMuPDF (fitz) strictly for visual purposes."""
-    if not fitz:
-        print("Skipping image overlay: PyMuPDF not installed.")
-        return
-
+def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100, height=40):
+    """
+    Adds an image to pages.
+    Searches for 'Signature of the' -> 'Signature' -> Fallback to bottom right.
+    """
     try:
         doc = fitz.open(pdf_path)
+        modified = False
+        
         for page in doc:
-            page.insert_image(
-                fitz.Rect(x, y, x + width, y + height),
-                filename=image_path
-            )
-        doc.saveIncr() # Incremental save is usually faster/safer
-        print(f"Added visual header/image to all pages of {pdf_path}")
+            insert_rect = None
+            
+            # 1. Search for exact phrase
+            text_instances = page.search_for("Signature of the")
+            
+            # 2. Broader search
+            if not text_instances:
+                text_instances = page.search_for("Signature")
+
+            if text_instances:
+                text_rect = text_instances[-1]
+                # FIX: Use .x0 and .y0 instead of .x and .y
+                new_x = text_rect.x0-25
+                new_y = text_rect.y0 - height - 10
+                insert_rect = fitz.Rect(new_x, new_y, new_x + width, new_y + height)
+            
+            # 3. Explicit coordinates
+            elif x is not None and y is not None:
+                insert_rect = fitz.Rect(x, y, x + width, y + height)
+            
+            # 4. Fallback (Bottom Right)
+            else:
+                page_w = page.rect.width
+                page_h = page.rect.height
+                safe_x = page_w - width - 50 
+                safe_y = page_h - 150
+                insert_rect = fitz.Rect(safe_x, safe_y, safe_x + width, safe_y + height)
+
+            if insert_rect:
+                page.insert_image(insert_rect, filename=image_path, overlay=True)
+                modified = True
+
+        if modified:
+            doc.saveIncr()
+            print(f"Visual signature added to {os.path.basename(pdf_path)}")
+            
     except Exception as e:
-        print(f"Error adding image to PDF pages: {e}")
+        print(f"Error in visual signature: {e}")
+        traceback.print_exc()
 
 # --- PDF SIGNING UTILITY ---
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
@@ -318,12 +350,18 @@ class PdfWriter:
 
             # 2. Add Visuals (Header/Signature Image on ALL pages)
             # We do this BEFORE signing so the signature hash covers these edits.
+            # 2. Add Visuals (Header/Signature Image on ALL pages)
             if sign_info and sign_info.get('should_sign') and sign_info.get('image_path'):
                 print("Adding visual signature/header to all pages...")
+                
+                # CHANGE THIS CALL:
                 add_image_to_all_pages_fitz(
                     output_filename,
                     sign_info['image_path'],
-                    x=400, y=600, width=100, height=40 # Adjust coordinates as needed
+                    # Remove x and y arguments to trigger dynamic search
+                    # x=400, y=600, 
+                    width=100, 
+                    height=50 # Adjusted height slightly
                 )
 
             # 3. Cryptographic Signature (Page 1)
@@ -360,154 +398,69 @@ def get_formatter(format_choice):
     return formatter
 
 # --- CONTROLLER ---
-# --- Replace the ReportController.run and _generate_all_formats with this version ---
-
 class ReportController:
     def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
-        self.excel_path = excel_path
-        self.format_choice = format_choice
-        self.learner_type = learner_type
-        self.slow_threshold = slow_thresh
-        self.fast_threshold = fast_thresh
-        self.output_type = output_type
-        self.subject = ""
-        self.semester = semester.lower().strip()
-        self.sign_info = sign_info
-        self.common_comment = common_comment
-        self.reader = DataReader()
-        self.processor = StudentDataProcessor()
-        # Do not set a single writer here
-
+        self.excel_path = excel_path; self.format_choice = format_choice; self.learner_type = learner_type
+        self.slow_threshold = slow_thresh; self.fast_threshold = fast_thresh; self.output_type = output_type
+        self.subject = ""; self.semester = semester.lower().strip(); self.sign_info = sign_info
+        self.common_comment = common_comment; self.reader = DataReader(); self.processor = StudentDataProcessor()
+        self.writer = get_writer(output_type)
+        
     def run(self):
         all_student_data, detected_subject = self.reader.read_data(self.excel_path)
-        if not all_student_data:
-            return None
-
+        if not all_student_data: return None
+        
         self.subject = detected_subject.lower().strip()
         processed_students = self.processor.process_data(all_student_data, self.subject, self.semester, self.common_comment)
         final_filtered_students = self.processor.filter_students(processed_students, self.learner_type, self.slow_threshold, self.fast_threshold)
-
+        
         if not final_filtered_students:
             print(f"\nNo students found for the selected criteria.")
             return None
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
-
-        date_str = datetime.now().strftime('%d_%m_%y')
-        base_dir = "Learner_Monitor_Reports"
-        learner_folder = f"{self.learner_type.title()}_Learners"
-        sem_name = self.semester.upper()
+        
+        date_str = datetime.now().strftime('%d_%m_%y'); base_dir = "Learner_Monitor_Reports"
+        learner_folder = f"{self.learner_type.title()}_Learners"; sem_name = self.semester.upper()
         subj_name = re.sub(r'[\\/*?:"<>|]', "", self.subject.replace(' ', '_').title())
         output_dir = os.path.join(base_dir, learner_folder, f"Semester_{sem_name}", subj_name)
         os.makedirs(output_dir, exist_ok=True)
-
-        # If '5' denotes 'all formats'
+        
         if self.format_choice == '5':
             return self._generate_all_formats(final_filtered_students, output_dir, date_str, sem_name, subj_name)
-
-        # create document object using formatter
+        
         formatter = get_formatter(self.format_choice)
         output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
-
-        # Normalize requested output types
-        requested = self._normalize_output_types(self.output_type)
-        print("DEBUG: requested output types:", requested)
-        generated_paths = []
-
-        # Use a deterministic base filename so docx/pdf won't clobber each other
+        ext = 'docx' if self.output_type == 'word' else 'pdf'
         report_name = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}.get(self.format_choice, "Report")
-        base_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}'
+        output_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{ext}'
+        full_output_path = os.path.join(output_dir, output_filename)
+        
+        # after writer.write(...)
+        full_output_path = os.path.abspath(full_output_path)
+        self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
+        print("DEBUG: Controller wrote file (absolute path):", full_output_path, os.path.exists(full_output_path))
+        return full_output_path
 
-        # Always write DOCX first if any output requested (reliable)
-        docx_path = os.path.join(output_dir, base_filename + ".docx")
-        DocxWriter().write(output_object, docx_path)
-        if 'word' in requested:
-            generated_paths.append(docx_path)
-            print(f"DEBUG: Saved DOCX at {docx_path}")
-
-        # If PDF requested, convert the saved DOCX to PDF (docx2pdf required)
-        if 'pdf' in requested:
-            pdf_path = os.path.join(output_dir, base_filename + ".pdf")
-            if convert is None:
-                print("WARNING: docx2pdf not installed; cannot create PDF automatically.")
-            else:
-                try:
-                    convert(docx_path, pdf_path)
-                    time.sleep(0.5)
-                    if os.path.exists(pdf_path):
-                        generated_paths.append(pdf_path)
-                        print(f"DEBUG: Created PDF at {pdf_path}")
-                    else:
-                        print("ERROR: PDF conversion finished but file missing:", pdf_path)
-                except Exception as e:
-                    print("ERROR: PDF conversion failed:", e)
-                    traceback.print_exc()
-
-        # Return single string for one file, list for multiple (Flask handles both)
-        if len(generated_paths) == 1:
-            return generated_paths[0]
-        return generated_paths
-
+    
     def _generate_all_formats(self, students, output_dir, date_str, sem_name, subj_name):
-        """
-        Generate both Combined (Format1+2) and Summary (Format3).
-        Write docx first, then pdf if requested. Return a list of generated file paths.
-        """
-        # Create document objects
+        ext = 'docx' if self.output_type == 'word' else 'pdf'
+        
+        comb_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{ext}'
         f1_2_formatter = Format1And2DocxFormatter()
         doc1 = f1_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
-
+        full_path1 = os.path.join(output_dir, comb_fname)
+        self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')
+        
+        summ_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{ext}'
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
+        full_path2 = os.path.join(output_dir, summ_fname)
 
-        # Base names
-        base1 = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}'
-        base2 = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Summary_Report_{date_str}'
+        full_path1 = os.path.abspath(full_path1)
+        self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')
 
-        requested = self._normalize_output_types(self.output_type)
-        generated_paths = []
+        full_path2 = os.path.abspath(full_path2)
+        self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
 
-        # Always write docx first for both docs
-        docx1 = os.path.join(output_dir, base1 + ".docx")
-        DocxWriter().write(doc1, docx1)
-        docx2 = os.path.join(output_dir, base2 + ".docx")
-        DocxWriter().write(doc2, docx2)
-
-        if 'word' in requested:
-            generated_paths.extend([docx1, docx2])
-
-        if 'pdf' in requested:
-            pdf1 = os.path.join(output_dir, base1 + ".pdf")
-            pdf2 = os.path.join(output_dir, base2 + ".pdf")
-            if convert is None:
-                print("WARNING: docx2pdf not installed; skipping PDF generation for all-formats.")
-            else:
-                try:
-                    convert(docx1, pdf1)
-                    convert(docx2, pdf2)
-                    time.sleep(0.5)
-                    if os.path.exists(pdf1): generated_paths.append(pdf1)
-                    if os.path.exists(pdf2): generated_paths.append(pdf2)
-                except Exception as e:
-                    print("ERROR: PDF conversion failed for all-formats:", e)
-                    traceback.print_exc()
-
-        return generated_paths
-
-    def _normalize_output_types(self, output_type):
-        if isinstance(output_type, (list, tuple)):
-            tokens = list(output_type)
-        elif isinstance(output_type, str):
-            lower = output_type.lower().strip()
-            if lower in ('both', 'all'):
-                tokens = ['pdf', 'word']
-            elif lower in ('pdf', 'word'):
-                tokens = [lower]
-            else:
-                parts = [p.strip().lower() for p in re.split(r'[,\s]+', lower) if p.strip()]
-                tokens = parts or ['pdf']
-        else:
-            tokens = ['pdf']
-        tokens = [t for t in dict.fromkeys(tokens) if t in ('pdf', 'word')]
-        if not tokens:
-            tokens = ['pdf']
-        return tokens
+        # Return a list of files (app.py expects a list when multiple files are produced)
+        return [full_path1, full_path2]
