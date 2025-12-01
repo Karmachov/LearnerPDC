@@ -461,6 +461,7 @@ class ReportController:
 
         full_path2 = os.path.abspath(full_path2)
         self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
+        
 
         # Return a list of files (app.py expects a list when multiple files are produced)
         return [full_path1, full_path2]

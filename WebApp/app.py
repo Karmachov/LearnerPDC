@@ -127,6 +127,7 @@ def generate_report():
                         print("WARNING: expected file missing when zipping:", fpath)
             return send_file(os.path.abspath(zip_path), as_attachment=True)
 
+
 # single file
         if output_path and os.path.exists(output_path):
             return send_file(output_path, as_attachment=True)
