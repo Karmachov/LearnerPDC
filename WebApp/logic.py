@@ -26,14 +26,13 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from PyPDF2 import PdfReader
 
-# --- Optional Imports for PDF Conversion and Signing ---
 try:
     from docx2pdf import convert
 except ImportError:
     convert = None
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
 except ImportError:
     fitz = None
     print("Warning: 'pymupdf' (fitz) not found. Image overlay on PDF will be skipped.")
@@ -45,7 +44,6 @@ try:
 except ImportError:
     pdf = None
 
-# --- CONFIGURATION ---
 MIDTERM_TOTAL_MARKS = 30
 SEMESTER_MAPPING = {
     'i': 'I Year/ I semester', 'ii': 'I Year/ II semester', 'iii': 'II Year/ III semester',
@@ -53,7 +51,15 @@ SEMESTER_MAPPING = {
     'vii': 'IV Year/ VII semester', 'viii': 'IV Year/ VIII semester',
 }
 
-# --- PDF VISUAL HELPER ---
+
+CGPA_EXCEL_PATH = r"D:\OneDrive\Documents\Dummy_cg_values.xlsx"  
+
+CGPA_ROLL_CANDIDATES = [
+    'Roll Number', 'RollNo', 'Register Number of the Student', 'RegisterNumber', 'Register No', 'RegNo', 'Register Number'
+]
+CGPA_VALUE_CANDIDATES = ['CGPA', 'CGPA (up to previous semester)', 'Cumulative Grade Point Average', 'Cumulative GPA', 'CGPA_Value']
+
+
 def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100, height=40):
     """
     Adds an image to pages.
@@ -66,25 +72,25 @@ def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100,
         for page in doc:
             insert_rect = None
             
-            # 1. Search for exact phrase
+
             text_instances = page.search_for("Signature of the")
             
-            # 2. Broader search
+
             if not text_instances:
                 text_instances = page.search_for("Signature")
 
             if text_instances:
                 text_rect = text_instances[-1]
-                # FIX: Use .x0 and .y0 instead of .x and .y
+
                 new_x = text_rect.x0-25
                 new_y = text_rect.y0 - height - 10
                 insert_rect = fitz.Rect(new_x, new_y, new_x + width, new_y + height)
             
-            # 3. Explicit coordinates
+
             elif x is not None and y is not None:
                 insert_rect = fitz.Rect(x, y, x + width, y + height)
             
-            # 4. Fallback (Bottom Right)
+
             else:
                 page_w = page.rect.width
                 page_h = page.rect.height
@@ -104,7 +110,7 @@ def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100,
         print(f"Error in visual signature: {e}")
         traceback.print_exc()
 
-# --- PDF SIGNING UTILITY ---
+
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
     """
     Digitally signs the PDF on the FIRST page.
@@ -115,9 +121,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         return False
 
     try:
-        # Define the visible signature box (x1, y1, x2, y2) on FIRST page
-        # Note: Coordinate systems vary. endesive typically uses bottom-left origin.
-        # Adjust these coordinates based on your specific PDF layout.
+        
         single_page_box = (435, 72, 540, 105) 
         
         date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'')
@@ -129,7 +133,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         with open(pdf_path, 'rb') as f_in: 
             pdf_data = f_in.read()
 
-        # Metadata for signature
+
         signdata = {
             'sigflags': 3,
             'contact': 'faculty.email@example.com',
@@ -138,10 +142,10 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             'signaturebox': single_page_box,
             'signature_img': image_path,
             'signingdate': date,
-            'page': 0  # 0 = First Page
+            'page': 0
         }
 
-        # Generate the signature (CMS)
+
         signed_pdf_bytes = pdf.cms.sign(
             pdf_data, 
             signdata, 
@@ -150,7 +154,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             othercerts=()
         )
 
-        # Write final signed PDF
+ 
         with open(pdf_path, 'wb') as f_out: 
             f_out.write(pdf_data + signed_pdf_bytes)
             
@@ -161,7 +165,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         traceback.print_exc()
         return False
 
-# --- DATA READER ---
+
 class DataReader:
     COLUMN_MAPPING = {
         'Roll Number': 'Register Number of the Student', 'Student Name': 'Student Name',
@@ -172,11 +176,11 @@ class DataReader:
         try:
             workbook = openpyxl.load_workbook(file_path, read_only=True)
             sheet = workbook.active
-            # Scan first few rows for "Exam:" to find subject
+
             for row in range(1, 6):
                 cell_value = sheet.cell(row=row, column=1).value
                 if cell_value and isinstance(cell_value, str) and "Exam:" in cell_value:
-                    # Parse string like "Exam: ... / SUBJECT [CODE]"
+                    
                     last_slash_index = cell_value.rfind('/')
                     first_bracket_index = cell_value.find('[')
                     if last_slash_index != -1 and first_bracket_index != -1 and last_slash_index < first_bracket_index:
@@ -188,6 +192,71 @@ class DataReader:
             print(f"Warning: Could not auto-detect subject name. Details: {e}")
             return None
 
+    def _find_first_matching_column(self, df_columns, candidates):
+        """Return the first column name in df_columns that matches any candidate (case-insensitive)."""
+        cols_lower = {c.lower(): c for c in df_columns}
+        for cand in candidates:
+            if cand.lower() in cols_lower:
+                return cols_lower[cand.lower()]
+        return None
+
+    def _load_cgpa_lookup(self, path=CGPA_EXCEL_PATH):
+        """
+        Load the CGPA lookup file into a mapping of roll -> cgpa.
+        Normalization: only strip whitespace from roll strings (as per user request).
+        If file is missing or cannot be parsed, return an empty dict.
+        """
+        if not path or not os.path.exists(path):
+            
+            return {}
+
+        try:
+            cgpa_df = pd.read_excel(path)
+            cgpa_df.columns = cgpa_df.columns.str.strip()
+
+            roll_col = self._find_first_matching_column(cgpa_df.columns, CGPA_ROLL_CANDIDATES)
+            cgpa_col = self._find_first_matching_column(cgpa_df.columns, CGPA_VALUE_CANDIDATES)
+
+            if roll_col is None or cgpa_col is None:
+                
+                return {}
+
+            
+            cgpa_df['_roll_norm'] = cgpa_df[roll_col].astype(str).str.strip()
+
+           
+            mapping = pd.Series(cgpa_df[cgpa_col].values, index=cgpa_df['_roll_norm']).to_dict()
+            return mapping
+        except Exception as e:
+            print(f"Warning: Failed to load CGPA lookup file: {e}")
+            traceback.print_exc()
+            return {}
+
+    def _attach_cgpa_to_df(self, df):
+        """
+        Attach CGPA values to the main dataframe's 'Register Number of the Student' column.
+        """
+        mapping = self._load_cgpa_lookup()
+        if not mapping:
+            
+            df['CGPA (up to previous semester)'] = None
+            return df
+
+        reg_col = 'Register Number of the Student'
+        if reg_col not in df.columns:
+            df['CGPA (up to previous semester)'] = None
+            return df
+
+        
+        df['_reg_norm'] = df[reg_col].astype(str).str.strip()
+
+        
+        df['CGPA (up to previous semester)'] = df['_reg_norm'].map(mapping).where(lambda x: pd.notna(x), None)
+
+        
+        df.drop(columns=['_reg_norm'], inplace=True, errors='ignore')
+        return df
+
     def read_data(self, file_path):
         subject_name = self._extract_subject_from_header(file_path)
         if not subject_name: 
@@ -198,11 +267,14 @@ class DataReader:
             df.columns = df.columns.str.strip()
             df.rename(columns=self.COLUMN_MAPPING, inplace=True)
             
-            # Clean Register Number (remove .0 if present)
+            
             reg_col = 'Register Number of the Student'
             if reg_col in df.columns:
                 df[reg_col] = df[reg_col].astype(str).str.replace(r'\.0$', '', regex=True)
+
             
+            df = self._attach_cgpa_to_df(df)
+
             return df.to_dict('records'), subject_name
         except FileNotFoundError:
             raise
@@ -210,7 +282,7 @@ class DataReader:
             traceback.print_exc()
             raise
 
-# --- DATA PROCESSOR ---
+
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
         try: return (float(marks) / MIDTERM_TOTAL_MARKS) * 100
@@ -221,7 +293,9 @@ class StudentDataProcessor:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip().lower()
             student['Semester'] = str(semester).strip().lower()
-            student['CGPA (up to previous semester)'] = 5 # Placeholder as per original code
+           
+            if not student.get('CGPA (up to previous semester)'):
+                student['CGPA (up to previous semester)'] = None
             student['Actions taken to improve performance'] = common_comment
         return all_student_data
 
@@ -236,7 +310,7 @@ class StudentDataProcessor:
 
 # --- REPORT FORMATTERS ---
 class BaseFormatter:
-    FONT_NAME = "Brush Script MT Italic" # Used for signature-like fonts?
+    FONT_NAME = "Brush Script MT Italic" 
     BODY_FONT = "Times New Roman"
 
     def get_year_semester_string(self, roman_numeral): 
@@ -337,35 +411,31 @@ class PdfWriter:
             raise ModuleNotFoundError("docx2pdf library is required for PDF output.")
         
         try:
-            # 1. Convert DOCX -> PDF
+            
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_docx = os.path.join(temp_dir, "temp.docx")
                 doc.save(temp_docx)
                 convert(temp_docx, output_filename)
             
-            time.sleep(1) # File system buffer
+            time.sleep(1) 
             if platform.system() == "Darwin": time.sleep(1)
 
             print(f"\nSuccess! PDF generated as '{output_filename}' ✨")
 
-            # 2. Add Visuals (Header/Signature Image on ALL pages)
-            # We do this BEFORE signing so the signature hash covers these edits.
-            # 2. Add Visuals (Header/Signature Image on ALL pages)
+            
             if sign_info and sign_info.get('should_sign') and sign_info.get('image_path'):
                 print("Adding visual signature/header to all pages...")
                 
-                # CHANGE THIS CALL:
+                
                 add_image_to_all_pages_fitz(
                     output_filename,
                     sign_info['image_path'],
-                    # Remove x and y arguments to trigger dynamic search
-                    # x=400, y=600, 
+                     
                     width=100, 
-                    height=50 # Adjusted height slightly
+                    height=50 
                 )
 
-            # 3. Cryptographic Signature (Page 1)
-            # This locks the file. Any edits after this break the signature.
+            
             if sign_info and sign_info.get('should_sign') and format_choice in ['1', '2', '4', '5']:
                 print("Proceeding to sign PDF...")
                 sign_pdf(
@@ -435,7 +505,7 @@ class ReportController:
         output_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{ext}'
         full_output_path = os.path.join(output_dir, output_filename)
         
-        # after writer.write(...)
+        
         full_output_path = os.path.abspath(full_output_path)
         self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
         print("DEBUG: Controller wrote file (absolute path):", full_output_path, os.path.exists(full_output_path))
@@ -462,6 +532,5 @@ class ReportController:
         full_path2 = os.path.abspath(full_path2)
         self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
         
-
-        # Return a list of files (app.py expects a list when multiple files are produced)
+        
         return [full_path1, full_path2]

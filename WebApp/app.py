@@ -2,12 +2,11 @@ import os
 import traceback
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
-from logic import ReportController  # Import the controller from our logic file
+from logic import ReportController
 import time
 
 app = Flask(__name__)
 
-# Configure a folder to store temporary uploaded files
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -144,24 +143,6 @@ def generate_report():
                 "expected_path": output_path,
                 "parent_listing_sample": listing[:50]
             }), 500
-
-
-
-        # 7. Return Result
-        if isinstance(output_path, list):
-            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
-            import zipfile
-            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-                for fpath in output_path:
-                    if os.path.exists(fpath):
-                        zf.write(fpath, arcname=os.path.basename(fpath))
-            return send_file(os.path.abspath(zip_path), as_attachment=True)
-
-# else single file (string)
-        if output_path and os.path.exists(output_path):
-            return send_file(output_path, as_attachment=True)
-        else:
-            return jsonify({"error": "No students found for the criteria, or report could not be generated."}), 404
 
     except ValueError as ve:
         traceback.print_exc()
