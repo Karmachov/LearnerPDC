@@ -49,14 +49,22 @@
                 </div>
             </div>
 
-            <div class="mb-8">
-                <label class="block text-sm font-medium text-gray-700 mb-2">CGPA / Previous Results File (Optional)</label>
-                <div id="cgpa-drop-zone" class="drop-zone relative w-full p-6 text-center rounded-lg border-2 border-dashed border-gray-300 hover:bg-gray-50 transition-colors">
-                    <input type="file" id="cgpaFile" name="cgpaFile" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".xlsx, .xls, .csv">
-                    <div class="flex flex-col items-center justify-center">
-                        <i class="fa-solid fa-table-list text-blue-500 text-3xl mb-2"></i>
-                        <p id="cgpa-drop-text" class="text-sm text-gray-600">Drag & Drop <b>CGPA Excel/CSV</b> here</p>
-                        <p class="text-xs text-gray-400">(Must contain 'Roll No' and 'CGPA' columns)</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">CGPA File </label>
+                    <div id="cgpa-drop-zone" class="drop-zone relative w-full h-32 p-4 text-center rounded-lg border-2 border-dashed border-gray-300 hover:bg-gray-50 transition-colors flex flex-col items-center justify-center">
+                        <input type="file" id="cgpaFile" name="cgpaFile" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".xlsx, .xls, .csv">
+                        <i class="fa-solid fa-table-list text-blue-500 text-2xl mb-2"></i>
+                        <p id="cgpa-drop-text" class="text-xs text-gray-600">Drag <b>CGPA Excel</b> here</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Visual Signature Image </label>
+                    <div id="sig-drop-zone" class="drop-zone relative w-full h-32 p-4 text-center rounded-lg border-2 border-dashed border-gray-300 hover:bg-gray-50 transition-colors flex flex-col items-center justify-center">
+                        <input type="file" id="imageFile" name="imageFile" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".png,.jpg,.jpeg">
+                        <i class="fa-solid fa-signature text-purple-500 text-2xl mb-2"></i>
+                        <p id="sig-drop-text" class="text-xs text-gray-600">Upload <b>.png/.jpg</b> signature</p>
                     </div>
                 </div>
             </div>
@@ -132,7 +140,7 @@
                         <input type="checkbox" id="enableSigning" name="enableSigning" onchange="toggleSigningFields()"
                             class="h-5 w-5 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
                         <label for="enableSigning" class="ml-2 block text-sm font-semibold text-gray-900">
-                            Digitally Sign PDF Report
+                            Digitally Sign PDF Report 
                         </label>
                     </div>
 
@@ -144,10 +152,6 @@
                         <div>
                             <label class="block text-xs font-medium text-gray-600 mb-1">Certificate (.pem)</label>
                             <input type="file" name="certFile" accept=".pem" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Signature Image (.png)</label>
-                            <input type="file" name="imageFile" accept=".png,.jpg" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 mb-1">Private Key Password</label>
@@ -169,14 +173,12 @@
     </div>
 
     <script>
-        // --- 1. UI Logic for Student Data File (First Box) ---
+        // --- 1. UI Logic for Student Data File ---
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('excelFile');
         const dropText = document.getElementById('drop-text');
-        
         let uploadedFile = null;
 
-        // Drag & Drop Events
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
         dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
         dropZone.addEventListener('drop', (e) => {
@@ -187,24 +189,19 @@
                 handleFile(e.dataTransfer.files[0]);
             }
         });
-        
-        // Click Event
         fileInput.addEventListener('change', () => { 
             if (fileInput.files.length > 0) handleFile(fileInput.files[0]); 
         });
-        
         function handleFile(file) {
             uploadedFile = file;
             dropText.innerHTML = `<span class="text-green-600 font-semibold">${file.name}</span>`;
         }
 
-        // --- 2. UI Logic for CGPA File (Second Box) ---
-        // This is the new part that makes the second box text update
+        // --- 2. UI Logic for CGPA File ---
         const cgpaDropZone = document.getElementById('cgpa-drop-zone');
         const cgpaInput = document.getElementById('cgpaFile');
         const cgpaDropText = document.getElementById('cgpa-drop-text');
 
-        // Drag & Drop Events for CGPA
         cgpaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); cgpaDropZone.classList.add('dragover'); });
         cgpaDropZone.addEventListener('dragleave', () => { cgpaDropZone.classList.remove('dragover'); });
         cgpaDropZone.addEventListener('drop', (e) => {
@@ -215,18 +212,36 @@
                 handleCgpaFile(e.dataTransfer.files[0]);
             }
         });
-
-        // Click Event for CGPA
         cgpaInput.addEventListener('change', () => {
             if (cgpaInput.files.length > 0) handleCgpaFile(cgpaInput.files[0]);
         });
-
         function handleCgpaFile(file) {
-            // Update the text inside the second box with green bold filename
-            cgpaDropText.innerHTML = `<span class="text-green-600 font-semibold">${file.name}</span>`;
+            cgpaDropText.innerHTML = `<span class="text-blue-600 font-semibold">${file.name}</span>`;
         }
 
-        // --- 3. UI Logic for Digital Signature Visibility ---
+        // --- 3. UI Logic for Signature Image File (NEW) ---
+        const sigDropZone = document.getElementById('sig-drop-zone');
+        const sigInput = document.getElementById('imageFile');
+        const sigDropText = document.getElementById('sig-drop-text');
+
+        sigDropZone.addEventListener('dragover', (e) => { e.preventDefault(); sigDropZone.classList.add('dragover'); });
+        sigDropZone.addEventListener('dragleave', () => { sigDropZone.classList.remove('dragover'); });
+        sigDropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            sigDropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                sigInput.files = e.dataTransfer.files;
+                handleSigFile(e.dataTransfer.files[0]);
+            }
+        });
+        sigInput.addEventListener('change', () => {
+            if (sigInput.files.length > 0) handleSigFile(sigInput.files[0]);
+        });
+        function handleSigFile(file) {
+            sigDropText.innerHTML = `<span class="text-purple-600 font-semibold">${file.name}</span>`;
+        }
+
+        // --- 4. UI Logic for Digital Signature Visibility ---
         function toggleSignatureSection() {
             const outputType = document.getElementById('outputType').value;
             const wrapper = document.getElementById('signatureSectionWrapper');
@@ -236,7 +251,7 @@
                 wrapper.classList.add('open');
             } else {
                 wrapper.classList.remove('open');
-                signingCheckbox.checked = false; // Reset if switching away
+                signingCheckbox.checked = false; 
                 toggleSigningFields();
             }
         }
@@ -251,7 +266,7 @@
             }
         }
 
-        // --- 4. Form Submission Logic ---
+        // --- 5. Form Submission Logic ---
         const form = document.getElementById('reportForm');
         const submitBtn = document.getElementById('submitBtn');
         const btnText = document.getElementById('btn-text');

@@ -38,63 +38,70 @@ def generate_report():
         format_choice = request.form.get('formatChoice')
         output_type = request.form.get('outputType')
 
-        # Validate required text fields
         if not all([semester, learner_type, comment, slow_thresh_str, fast_thresh_str, format_choice, output_type]):
             return jsonify({"error": "Missing form data. Please fill out all fields."}), 400
 
-        # Convert numerical thresholds
         try:
             slow_thresh = float(slow_thresh_str)
             fast_thresh = float(fast_thresh_str)
         except ValueError:
              return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
-        # 3. Save the Excel File
+        # 3. Save Files
+        
+        # A. Main Excel
         filename = secure_filename(excel_file.filename)
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
-        # --- NEW CODE: Handle CGPA File ---
+        # B. CGPA File
         cgpa_path = None
         cgpa_file = request.files.get('cgpaFile')
-        
         if cgpa_file and cgpa_file.filename != '':
             cgpa_filename = secure_filename(f"CGPA_{cgpa_file.filename}")
             cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
             cgpa_file.save(cgpa_path)
-        # ----------------------------------
 
-        # 4. Handle Digital Signature Logic
-        sign_info = {'should_sign': False}
+        # C. Signature Image (Save INDEPENDENTLY of crypto signing)
+        img_path = None
+        img_file = request.files.get('imageFile')
+        if img_file and img_file.filename != '':
+            img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
+            img_file.save(img_path)
+
+        # 4. Construct Sign Info
+        # We pass the image path regardless of whether 'should_sign' is True
+        sign_info = {
+            'should_sign': False, 
+            'image_path': img_path 
+        }
+
+        # Check for Cryptographic Signing Checkbox
         if request.form.get('enableSigning') == 'on':
             key_file = request.files.get('keyFile')
             cert_file = request.files.get('certFile')
-            img_file = request.files.get('imageFile')
             password = request.form.get('keyPassword')
 
-            if all([key_file, cert_file, img_file]):
+            if all([key_file, cert_file]):
                 key_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(key_file.filename))
                 cert_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(cert_file.filename))
-                img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
                 
                 key_file.save(key_path)
                 cert_file.save(cert_path)
-                img_file.save(img_path)
 
-                sign_info = {
+                sign_info.update({
                     'should_sign': True,
                     'key_path': key_path,
                     'cert_path': cert_path,
-                    'image_path': img_path,
                     'password': password
-                }
+                })
             else:
                 return jsonify({"error": "Digital Signing is enabled but missing keys or certificates."}), 400
 
         # 5. Initialize Controller
         controller = ReportController(
             excel_path=excel_path,
-            cgpa_path=cgpa_path,  # <--- PASS THE NEW PATH HERE
+            cgpa_path=cgpa_path,
             format_choice=format_choice,
             learner_type=learner_type,
             slow_thresh=slow_thresh,
