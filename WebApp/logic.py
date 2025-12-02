@@ -188,23 +188,23 @@ class BaseFormatter:
         p.alignment = getattr(WD_ALIGN_PARAGRAPH, str(align).upper(), WD_ALIGN_PARAGRAPH.LEFT)
         cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper(), WD_ALIGN_VERTICAL.TOP)
     
-    def add_signature_line(self, doc_or_cell):
+    def add_signature_line(self, doc_or_cell, print_faculty=True):
         """
-        Adds the signature (image + underline + label) and optionally the faculty name
-        below the signature. Works when doc_or_cell is either a Document or a table Cell.
+        Adds the signature (image + underline + label).
+        If print_faculty is True and self.faculty_name exists, prints the faculty name
+        below the signature. For formats that need custom placement, pass print_faculty=False
+        and handle the faculty name separately.
         """
-    # paragraph where signature image and signature line are placed
         p = doc_or_cell.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     # Try to insert signature image if provided
-        if self.signature_image_path and os.path.exists(self.signature_image_path):
+        if getattr(self, "signature_image_path", None) and os.path.exists(self.signature_image_path):
             try:
                 run = p.add_run()
                 run.add_picture(self.signature_image_path, width=Inches(0.8))
                 run.add_break()
             except Exception as e:
-            # don't break report generation for image errors; show debug in console
                 print(f"Error inserting signature image: {e}")
 
     # Add signature underline and label
@@ -216,19 +216,20 @@ class BaseFormatter:
         except Exception:
             pass
 
-    # If faculty_name provided on the formatter, add it right-aligned below the signature
-        faculty = getattr(self, "faculty_name", None)
-        if faculty:
-        # small spacing paragraph (right aligned)
-            fn_para = doc_or_cell.add_paragraph()
-            fn_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            fn_run = fn_para.add_run(str(faculty).strip())
-            try:
-                fn_run.font.name = self.BODY_FONT
-                fn_run.font.size = Pt(10)
-                fn_run.font.bold = True
-            except Exception:
-                pass
+    # If requested, print the faculty name (right-aligned) below the signature
+        if print_faculty:
+            faculty = getattr(self, "faculty_name", None)
+            if faculty:
+                fn_para = doc_or_cell.add_paragraph()
+                fn_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                fn_run = fn_para.add_run(str(faculty).strip())
+                try:
+                    fn_run.font.name = self.BODY_FONT
+                    fn_run.font.size = Pt(10)
+                    fn_run.font.bold = True
+                except Exception:
+                    pass
+
 
     
     def _add_document_header(self, cell):
@@ -330,11 +331,26 @@ class Format3DocxFormatter(BaseFormatter):
                 self.set_cell_properties(rc[4], str(row_data.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.BODY_FONT)
             
             # --- FOOTER: Date & Signature ONLY ---
+            # --- FOOTER: Date & Signature ONLY ---
             p = doc.add_paragraph()
             p.add_run(f"\nDate: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT
-            self.add_signature_line(doc)
-            
+            self.add_signature_line(doc,print_faculty=False)
+
+# --- ensure faculty name is printed right-aligned under the signature for Format 3 ---
+            faculty = getattr(self, "faculty_name", None)
+            if faculty:
+                fn_para = doc.add_paragraph()
+                fn_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                fn_run = fn_para.add_run(str(faculty).strip())
+                try:
+                    fn_run.font.name = self.BODY_FONT
+                    fn_run.font.size = Pt(10)
+                    fn_run.font.bold = True
+                except Exception:
+                    pass
+
             if i < len(grouped) - 1: doc.add_page_break()
+
         return doc
 
 class Format1And2DocxFormatter(BaseFormatter):
@@ -470,7 +486,8 @@ class ReportController:
         
         summ_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{ext}'
         f3_formatter = Format3DocxFormatter()
-        f3_formatter.signature_image_path = sig_path 
+        f3_formatter.signature_image_path = sig_path
+        f3_formatter.faculty_name = self.faculty_name
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
         full_path2 = os.path.join(output_dir, summ_fname)
         self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
