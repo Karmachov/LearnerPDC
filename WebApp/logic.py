@@ -222,8 +222,48 @@ class BaseFormatter:
         ct.cell(3, 0).text = "Total Weightage"; fc = ct.cell(4, 0); fc.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner"); fc.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
         pd_ = fc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(fc)
 
-    def _create_format2_content(self, doc, student):
-        doc.add_heading('Format -2 Report of performance/ improvement for slow and advanced learners', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    def _create_format2_content(self, doc, student, slow_threshold, fast_threshold):
+        # --- Dynamic Heading Based on Learner Type (slow vs advanced) ---
+# use a paragraph with Heading style so Word renders it like a heading
+        heading = doc.add_paragraph(style='Heading 2')
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        r1 = heading.add_run("Format -2 Report of performance/ improvement for ")
+        r2 = heading.add_run("slow")
+        r3 = heading.add_run(" and ")
+        r4 = heading.add_run("advanced")
+        r5 = heading.add_run(" learners")
+
+# make sure font properties are explicitly set (helps ensure character formatting will show)
+        for r in (r1, r2, r3, r4, r5):
+            r.font.name = self.BODY_FONT
+            r.font.size = Pt(14)
+
+# Ensure thresholds and mid are numeric and compute membership
+        try:
+            mid = float(student.get("MidtermPercentage", 0))
+        except Exception:
+            mid = 0.0
+
+        try:
+            slow_num = float(slow_threshold)
+            fast_num = float(fast_threshold)
+        except Exception:
+            slow_num = slow_threshold
+            fast_num = fast_threshold
+
+        is_slow = mid <= slow_num
+
+# Set underline on the selected run (and explicitly disable underline on the other)
+        if is_slow:
+            r2.font.underline = True   # underline "slow"
+            r4.font.underline = False
+        else:
+            r4.font.underline = True   # underline "advanced"
+            r2.font.underline = False
+
+
+
         ht = doc.add_table(rows=1, cols=1); self._add_document_header(ht.cell(0,0))
         ct = doc.add_table(rows=8, cols=2); ct.style = 'Table Grid'
         self.set_cell_properties(ct.cell(0, 0), '1. Registration Number'); self.set_cell_properties(ct.cell(0, 1), student.get('Register Number of the Student', ''), font_name=self.BODY_FONT)
@@ -243,7 +283,8 @@ class BaseFormatter:
 class Format1DocxFormatter(BaseFormatter):
     def format(self, s, st, ft): doc = Document(); return self._generate_pages(doc, s, self._create_format1_content, st, ft)
 class Format2DocxFormatter(BaseFormatter):
-    def format(self, s, st, ft): doc = Document(); return self._generate_pages(doc, s, self._create_format2_content)
+    def format(self, s, st, ft): doc = Document(); return self._generate_pages(doc, s, self._create_format2_content, st, ft)
+
 
 # --- FORMAT 3: TABLE + DATE + SIGNATURE (NO CRITERIA TEXT) ---
 class Format3DocxFormatter(BaseFormatter):
@@ -270,8 +311,20 @@ class Format3DocxFormatter(BaseFormatter):
 class Format1And2DocxFormatter(BaseFormatter):
     def format(self, students, st, ft):
         doc = Document()
-        for i, student in enumerate(students): self._create_format1_content(doc, student, st, ft); doc.add_page_break(); self._create_format2_content(doc, student); (i < len(students) - 1) and doc.add_page_break()
+        for i, student in enumerate(students):
+            # Format 1 page
+            self._create_format1_content(doc, student, st, ft)
+            doc.add_page_break()
+
+            # Format 2 page (with thresholds)
+            self._create_format2_content(doc, student, st, ft)
+
+            # Page break between different students
+            if i < len(students) - 1:
+                doc.add_page_break()
+
         return doc
+
 
 # --- FILE WRITERS ---
 class DocxWriter:
