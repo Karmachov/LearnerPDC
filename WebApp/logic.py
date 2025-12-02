@@ -189,18 +189,47 @@ class BaseFormatter:
         cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper(), WD_ALIGN_VERTICAL.TOP)
     
     def add_signature_line(self, doc_or_cell):
+        """
+        Adds the signature (image + underline + label) and optionally the faculty name
+        below the signature. Works when doc_or_cell is either a Document or a table Cell.
+        """
+    # paragraph where signature image and signature line are placed
         p = doc_or_cell.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        # Fixed Image Size: 0.8 inches
+
+    # Try to insert signature image if provided
         if self.signature_image_path and os.path.exists(self.signature_image_path):
             try:
                 run = p.add_run()
                 run.add_picture(self.signature_image_path, width=Inches(0.8))
                 run.add_break()
             except Exception as e:
-                print(f"Error inserting image in Docx: {e}")
+            # don't break report generation for image errors; show debug in console
+                print(f"Error inserting signature image: {e}")
+
+    # Add signature underline and label
         p.add_run("\n" + "_" * 40 + "\n")
-        p.add_run("Signature of the\nsubject teacher / class coordinator")
+        label_run = p.add_run("Signature of the\nsubject teacher / class coordinator")
+        try:
+            label_run.font.name = self.BODY_FONT
+            label_run.font.size = Pt(10)
+        except Exception:
+            pass
+
+    # If faculty_name provided on the formatter, add it right-aligned below the signature
+        faculty = getattr(self, "faculty_name", None)
+        if faculty:
+        # small spacing paragraph (right aligned)
+            fn_para = doc_or_cell.add_paragraph()
+            fn_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            fn_run = fn_para.add_run(str(faculty).strip())
+            try:
+                fn_run.font.name = self.BODY_FONT
+                fn_run.font.size = Pt(10)
+                fn_run.font.bold = True
+            except Exception:
+                pass
+
     
     def _add_document_header(self, cell):
         p1 = cell.add_paragraph(); p1.add_run('Manipal Institute of Technology').bold = True; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -374,12 +403,13 @@ def get_formatter(format_choice):
 
 # --- CONTROLLER ---
 class ReportController:
-    def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
+    def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment, faculty_name=None):
         self.excel_path = excel_path
         self.cgpa_path = cgpa_path
         self.format_choice = format_choice; self.learner_type = learner_type
         self.slow_threshold = slow_thresh; self.fast_threshold = fast_thresh; self.output_type = output_type
         self.subject = ""; self.semester = semester.lower().strip(); self.sign_info = sign_info
+        self.faculty_name= faculty_name
         self.common_comment = common_comment; self.reader = DataReader(); self.processor = StudentDataProcessor()
         self.writer = get_writer(output_type)
         
@@ -412,6 +442,8 @@ class ReportController:
         if self.sign_info and self.sign_info.get('image_path'):
             formatter.signature_image_path = self.sign_info.get('image_path')
 
+        formatter.faculty_name = self.faculty_name if hasattr(self, 'faculty_name') else None
+
         output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
         ext = 'docx' if self.output_type == 'word' else 'pdf'
         report_name = {'1': 'Format1', '2': 'Format2', '3': 'Summary', '4': 'Combined'}.get(self.format_choice, "Report")
@@ -430,7 +462,8 @@ class ReportController:
 
         comb_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{ext}'
         f1_2_formatter = Format1And2DocxFormatter()
-        f1_2_formatter.signature_image_path = sig_path 
+        f1_2_formatter.signature_image_path = sig_path
+        f1_2_formatter.faculty_name = self.faculty_name
         doc1 = f1_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
         full_path1 = os.path.join(output_dir, comb_fname)
         self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')

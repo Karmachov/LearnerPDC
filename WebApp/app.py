@@ -33,6 +33,7 @@ def generate_report():
         semester = request.form.get('semester')
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
+        faculty_name = request.form.get('facultyName')
         slow_thresh_str = request.form.get('slowThreshold')
         fast_thresh_str = request.form.get('fastThreshold')
         format_choice = request.form.get('formatChoice')
@@ -109,8 +110,10 @@ def generate_report():
             output_type=output_type,
             semester=semester,
             sign_info=sign_info,
-            common_comment=comment
+            common_comment=comment,
+            faculty_name=faculty_name
         )
+
 
         # 6. Run Generation
         output_path = controller.run()
