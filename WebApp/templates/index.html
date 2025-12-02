@@ -49,6 +49,18 @@
                 </div>
             </div>
 
+            <div class="mb-8">
+                <label class="block text-sm font-medium text-gray-700 mb-2">CGPA / Previous Results File (Optional)</label>
+                <div id="cgpa-drop-zone" class="drop-zone relative w-full p-6 text-center rounded-lg border-2 border-dashed border-gray-300 hover:bg-gray-50 transition-colors">
+                    <input type="file" id="cgpaFile" name="cgpaFile" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".xlsx, .xls, .csv">
+                    <div class="flex flex-col items-center justify-center">
+                        <i class="fa-solid fa-table-list text-blue-500 text-3xl mb-2"></i>
+                        <p id="cgpa-drop-text" class="text-sm text-gray-600">Drag & Drop <b>CGPA Excel/CSV</b> here</p>
+                        <p class="text-xs text-gray-400">(Must contain 'Roll No' and 'CGPA' columns)</p>
+                    </div>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
                 <div>
@@ -157,17 +169,14 @@
     </div>
 
     <script>
-        // --- UI Logic for Drag & Drop ---
+        // --- 1. UI Logic for Student Data File (First Box) ---
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('excelFile');
         const dropText = document.getElementById('drop-text');
-        const form = document.getElementById('reportForm');
-        const submitBtn = document.getElementById('submitBtn');
-        const btnText = document.getElementById('btn-text');
-        const loader = document.getElementById('loader');
-        const statusDiv = document.getElementById('status');
+        
         let uploadedFile = null;
 
+        // Drag & Drop Events
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
         dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
         dropZone.addEventListener('drop', (e) => {
@@ -179,16 +188,45 @@
             }
         });
         
+        // Click Event
         fileInput.addEventListener('change', () => { 
             if (fileInput.files.length > 0) handleFile(fileInput.files[0]); 
         });
         
         function handleFile(file) {
             uploadedFile = file;
-            dropText.innerHTML = `<span class="text-blue-600 font-semibold">${file.name}</span>`;
+            dropText.innerHTML = `<span class="text-green-600 font-semibold">${file.name}</span>`;
         }
 
-        // --- UI Logic for Digital Signature Visibility ---
+        // --- 2. UI Logic for CGPA File (Second Box) ---
+        // This is the new part that makes the second box text update
+        const cgpaDropZone = document.getElementById('cgpa-drop-zone');
+        const cgpaInput = document.getElementById('cgpaFile');
+        const cgpaDropText = document.getElementById('cgpa-drop-text');
+
+        // Drag & Drop Events for CGPA
+        cgpaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); cgpaDropZone.classList.add('dragover'); });
+        cgpaDropZone.addEventListener('dragleave', () => { cgpaDropZone.classList.remove('dragover'); });
+        cgpaDropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            cgpaDropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                cgpaInput.files = e.dataTransfer.files;
+                handleCgpaFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Click Event for CGPA
+        cgpaInput.addEventListener('change', () => {
+            if (cgpaInput.files.length > 0) handleCgpaFile(cgpaInput.files[0]);
+        });
+
+        function handleCgpaFile(file) {
+            // Update the text inside the second box with green bold filename
+            cgpaDropText.innerHTML = `<span class="text-green-600 font-semibold">${file.name}</span>`;
+        }
+
+        // --- 3. UI Logic for Digital Signature Visibility ---
         function toggleSignatureSection() {
             const outputType = document.getElementById('outputType').value;
             const wrapper = document.getElementById('signatureSectionWrapper');
@@ -213,10 +251,16 @@
             }
         }
 
-        // --- Form Submission Logic (Report) ---
+        // --- 4. Form Submission Logic ---
+        const form = document.getElementById('reportForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const btnText = document.getElementById('btn-text');
+        const loader = document.getElementById('loader');
+        const statusDiv = document.getElementById('status');
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!uploadedFile) { showStatus('Please upload an Excel file first.', 'error'); return; }
+            if (!uploadedFile) { showStatus('Please upload the Student Data Excel file.', 'error'); return; }
 
             setLoading(true);
             const formData = new FormData(form);

@@ -1,12 +1,14 @@
 import os
 import traceback
+import time
+import zipfile
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
 from logic import ReportController
-import time
 
 app = Flask(__name__)
 
+# Configure a folder to store temporary uploaded files
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -18,10 +20,6 @@ def index():
 
 @app.route('/generate-report', methods=['POST'])
 def generate_report():
-    """
-    Handle the form submission, run the report generation logic,
-    and return the generated file.
-    """
     try:
         # 1. Basic File Validation
         if 'excelFile' not in request.files:
@@ -56,20 +54,25 @@ def generate_report():
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
+        # --- NEW CODE: Handle CGPA File ---
+        cgpa_path = None
+        cgpa_file = request.files.get('cgpaFile')
+        
+        if cgpa_file and cgpa_file.filename != '':
+            cgpa_filename = secure_filename(f"CGPA_{cgpa_file.filename}")
+            cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
+            cgpa_file.save(cgpa_path)
+        # ----------------------------------
+
         # 4. Handle Digital Signature Logic
         sign_info = {'should_sign': False}
-        
-        # Check if signing is enabled (checkbox in frontend sends 'on' if checked)
         if request.form.get('enableSigning') == 'on':
-            # Retrieve signature assets
             key_file = request.files.get('keyFile')
             cert_file = request.files.get('certFile')
             img_file = request.files.get('imageFile')
             password = request.form.get('keyPassword')
 
-            # Ensure all signing components are present
-            if all([key_file, cert_file, img_file, password]):
-                # Save assets securely
+            if all([key_file, cert_file, img_file]):
                 key_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(key_file.filename))
                 cert_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(cert_file.filename))
                 img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
@@ -78,7 +81,6 @@ def generate_report():
                 cert_file.save(cert_path)
                 img_file.save(img_path)
 
-                # Update sign_info dictionary
                 sign_info = {
                     'should_sign': True,
                     'key_path': key_path,
@@ -87,69 +89,49 @@ def generate_report():
                     'password': password
                 }
             else:
-                # If user checked the box but missed a file, you might want to warn them.
-                # For now, we return an error to ensure they provide everything.
-                return jsonify({"error": "Digital Signing is enabled but missing keys, certificates, or password."}), 400
+                return jsonify({"error": "Digital Signing is enabled but missing keys or certificates."}), 400
 
         # 5. Initialize Controller
         controller = ReportController(
             excel_path=excel_path,
+            cgpa_path=cgpa_path,  # <--- PASS THE NEW PATH HERE
             format_choice=format_choice,
             learner_type=learner_type,
             slow_thresh=slow_thresh,
             fast_thresh=fast_thresh,
             output_type=output_type,
             semester=semester,
-            sign_info=sign_info,  # Pass the dynamic sign_info here
+            sign_info=sign_info,
             common_comment=comment
         )
 
         # 6. Run Generation
         output_path = controller.run()
+        
         # Normalize controller output
         if isinstance(output_path, list):
             output_path = [os.path.abspath(p) for p in output_path]
         else:
             output_path = os.path.abspath(output_path) if output_path else None
 
-        print("DEBUG: normalized output paths:", output_path)
-
-# If list -> zip them
+        # If list -> zip them
         if isinstance(output_path, list):
             zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
-            import zipfile
             with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for fpath in output_path:
                     if os.path.exists(fpath):
                         zf.write(fpath, arcname=os.path.basename(fpath))
-                    else:
-                        print("WARNING: expected file missing when zipping:", fpath)
             return send_file(os.path.abspath(zip_path), as_attachment=True)
 
-
-# single file
+        # Single file
         if output_path and os.path.exists(output_path):
             return send_file(output_path, as_attachment=True)
         else:
-    # helpful debugging listing
-            parent = os.path.dirname(output_path) if output_path else app.config['UPLOAD_FOLDER']
-            listing = []
-            try:
-                listing = os.listdir(parent)
-            except Exception as _:
-                listing = ["(couldn't list parent dir)"]
-            return jsonify({
-                "error": "file_not_found",
-                "expected_path": output_path,
-                "parent_listing_sample": listing[:50]
-            }), 500
+            return jsonify({"error": "Report generation failed."}), 500
 
-    except ValueError as ve:
-        traceback.print_exc()
-        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"An unexpected server error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001, threaded=False)
+    app.run(debug=True, port=5001)

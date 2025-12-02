@@ -1,49 +1,32 @@
 # ==============================================================================
 # REPORT GENERATION LOGIC LIBRARY
-#
-# This file contains all the core classes and functions for processing data
-# and generating reports. It is designed to be imported and used by a
-# controller, such as a web application or a command-line script.
 # ==============================================================================
 
 import os
 import tempfile
 import platform
 import time
-import getpass
+import re
 import traceback
 import warnings
-import re
 from datetime import datetime
 
 import pandas as pd
 import openpyxl
+import fitz  # PyMuPDF
+from docx2pdf import convert
+from endesive import pdf
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509 import load_pem_x509_certificate
+
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-from PyPDF2 import PdfReader
 
-try:
-    from docx2pdf import convert
-except ImportError:
-    convert = None
-
-try:
-    import fitz
-except ImportError:
-    fitz = None
-    print("Warning: 'pymupdf' (fitz) not found. Image overlay on PDF will be skipped.")
-
-try:
-    from endesive import pdf
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-    from cryptography.x509 import load_pem_x509_certificate
-except ImportError:
-    pdf = None
-
+# --- CONFIGURATION ---
 MIDTERM_TOTAL_MARKS = 30
 SEMESTER_MAPPING = {
     'i': 'I Year/ I semester', 'ii': 'I Year/ II semester', 'iii': 'II Year/ III semester',
@@ -51,19 +34,11 @@ SEMESTER_MAPPING = {
     'vii': 'IV Year/ VII semester', 'viii': 'IV Year/ VIII semester',
 }
 
-
-CGPA_EXCEL_PATH = r"D:\OneDrive\Documents\Dummy_cg_values.xlsx"  
-
-CGPA_ROLL_CANDIDATES = [
-    'Roll Number', 'RollNo', 'Register Number of the Student', 'RegisterNumber', 'Register No', 'RegNo', 'Register Number'
-]
-CGPA_VALUE_CANDIDATES = ['CGPA', 'CGPA (up to previous semester)', 'Cumulative Grade Point Average', 'Cumulative GPA', 'CGPA_Value']
-
-
+# --- PDF VISUAL HELPER ---
 def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100, height=40):
     """
     Adds an image to pages.
-    Searches for 'Signature of the' -> 'Signature' -> Fallback to bottom right.
+    Searches for 'Signature of the' -> 'Signature' -> Fallback.
     """
     try:
         doc = fitz.open(pdf_path)
@@ -72,25 +47,25 @@ def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100,
         for page in doc:
             insert_rect = None
             
-
+            # 1. Search for exact phrase
             text_instances = page.search_for("Signature of the")
             
-
+            # 2. Broader search
             if not text_instances:
                 text_instances = page.search_for("Signature")
 
             if text_instances:
                 text_rect = text_instances[-1]
-
-                new_x = text_rect.x0-25
+                # FIX: Use .x0/.y0 and apply -50 offset to shift left
+                new_x = text_rect.x0 - 27
                 new_y = text_rect.y0 - height - 10
                 insert_rect = fitz.Rect(new_x, new_y, new_x + width, new_y + height)
             
-
+            # 3. Explicit coordinates
             elif x is not None and y is not None:
                 insert_rect = fitz.Rect(x, y, x + width, y + height)
             
-
+            # 4. Fallback (Bottom Right)
             else:
                 page_w = page.rect.width
                 page_h = page.rect.height
@@ -110,62 +85,43 @@ def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100,
         print(f"Error in visual signature: {e}")
         traceback.print_exc()
 
-
+# --- PDF SIGNING UTILITY ---
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
-    """
-    Digitally signs the PDF on the FIRST page.
-    The digital signature applies to the whole document's hash.
-    """
-    if not all([pdf, key_path, cert_path, image_path]):
-        print("Skipping signing due to missing info or libraries.")
-        return False
-
     try:
-        
-        single_page_box = (435, 72, 540, 105) 
-        
+        single_page_box = (400, 50, 500, 100) 
         date = datetime.now().strftime('D:%Y%m%d%H%M%S+05\'30\'')
 
         with open(key_path, 'rb') as f: 
-            private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
+            private_key = load_pem_private_key(f.read(), password=password.encode('utf-8') if password else None)
         with open(cert_path, 'rb') as f: 
             certificate = load_pem_x509_certificate(f.read())
         with open(pdf_path, 'rb') as f_in: 
             pdf_data = f_in.read()
 
-
         signdata = {
             'sigflags': 3,
-            'contact': 'faculty.email@example.com',
-            'location': 'Manipal, India',
-            'reason': 'I am the author of this document',
+            'contact': 'faculty@example.com',
+            'location': 'Manipal',
+            'reason': 'Verified Report',
             'signaturebox': single_page_box,
             'signature_img': image_path,
             'signingdate': date,
             'page': 0
         }
 
+        signed_pdf_bytes = pdf.cms.sign(pdf_data, signdata, key=private_key, cert=certificate, othercerts=())
 
-        signed_pdf_bytes = pdf.cms.sign(
-            pdf_data, 
-            signdata, 
-            key=private_key, 
-            cert=certificate, 
-            othercerts=()
-        )
-
- 
         with open(pdf_path, 'wb') as f_out: 
             f_out.write(pdf_data + signed_pdf_bytes)
             
-        print(f"\n✅ Success! PDF digitally signed (Page 1).")
+        print("PDF digitally signed.")
         return True
     except Exception:
-        print(f"\nCRITICAL ERROR: Failed to sign the PDF.")
+        print("Failed to sign PDF.")
         traceback.print_exc()
         return False
 
-
+# --- DATA READER ---
 class DataReader:
     COLUMN_MAPPING = {
         'Roll Number': 'Register Number of the Student', 'Student Name': 'Student Name',
@@ -176,126 +132,96 @@ class DataReader:
         try:
             workbook = openpyxl.load_workbook(file_path, read_only=True)
             sheet = workbook.active
-
             for row in range(1, 6):
                 cell_value = sheet.cell(row=row, column=1).value
                 if cell_value and isinstance(cell_value, str) and "Exam:" in cell_value:
-                    
                     last_slash_index = cell_value.rfind('/')
                     first_bracket_index = cell_value.find('[')
                     if last_slash_index != -1 and first_bracket_index != -1 and last_slash_index < first_bracket_index:
-                        subject_name = cell_value[last_slash_index + 1 : first_bracket_index].strip()
-                        print(f"--> Automatically detected Subject Name: '{subject_name}'")
-                        return subject_name
+                        return cell_value[last_slash_index + 1 : first_bracket_index].strip()
             return None
-        except Exception as e:
-            print(f"Warning: Could not auto-detect subject name. Details: {e}")
+        except Exception:
             return None
-
-    def _find_first_matching_column(self, df_columns, candidates):
-        """Return the first column name in df_columns that matches any candidate (case-insensitive)."""
-        cols_lower = {c.lower(): c for c in df_columns}
-        for cand in candidates:
-            if cand.lower() in cols_lower:
-                return cols_lower[cand.lower()]
-        return None
-
-    def _load_cgpa_lookup(self, path=CGPA_EXCEL_PATH):
-        """
-        Load the CGPA lookup file into a mapping of roll -> cgpa.
-        Normalization: only strip whitespace from roll strings (as per user request).
-        If file is missing or cannot be parsed, return an empty dict.
-        """
-        if not path or not os.path.exists(path):
-            
-            return {}
-
-        try:
-            cgpa_df = pd.read_excel(path)
-            cgpa_df.columns = cgpa_df.columns.str.strip()
-
-            roll_col = self._find_first_matching_column(cgpa_df.columns, CGPA_ROLL_CANDIDATES)
-            cgpa_col = self._find_first_matching_column(cgpa_df.columns, CGPA_VALUE_CANDIDATES)
-
-            if roll_col is None or cgpa_col is None:
-                
-                return {}
-
-            
-            cgpa_df['_roll_norm'] = cgpa_df[roll_col].astype(str).str.strip()
-
-           
-            mapping = pd.Series(cgpa_df[cgpa_col].values, index=cgpa_df['_roll_norm']).to_dict()
-            return mapping
-        except Exception as e:
-            print(f"Warning: Failed to load CGPA lookup file: {e}")
-            traceback.print_exc()
-            return {}
-
-    def _attach_cgpa_to_df(self, df):
-        """
-        Attach CGPA values to the main dataframe's 'Register Number of the Student' column.
-        """
-        mapping = self._load_cgpa_lookup()
-        if not mapping:
-            
-            df['CGPA (up to previous semester)'] = None
-            return df
-
-        reg_col = 'Register Number of the Student'
-        if reg_col not in df.columns:
-            df['CGPA (up to previous semester)'] = None
-            return df
-
-        
-        df['_reg_norm'] = df[reg_col].astype(str).str.strip()
-
-        
-        df['CGPA (up to previous semester)'] = df['_reg_norm'].map(mapping).where(lambda x: pd.notna(x), None)
-
-        
-        df.drop(columns=['_reg_norm'], inplace=True, errors='ignore')
-        return df
 
     def read_data(self, file_path):
         subject_name = self._extract_subject_from_header(file_path)
-        if not subject_name: 
-            raise ValueError("Could not auto-detect subject name from Excel header.")
+        if not subject_name: raise ValueError("Could not auto-detect subject name.")
 
         try:
             df = pd.read_excel(file_path, skiprows=2)
             df.columns = df.columns.str.strip()
             df.rename(columns=self.COLUMN_MAPPING, inplace=True)
-            
-            
             reg_col = 'Register Number of the Student'
             if reg_col in df.columns:
                 df[reg_col] = df[reg_col].astype(str).str.replace(r'\.0$', '', regex=True)
-
-            
-            df = self._attach_cgpa_to_df(df)
-
             return df.to_dict('records'), subject_name
-        except FileNotFoundError:
-            raise
         except Exception:
             traceback.print_exc()
             raise
 
+    # --- NEW: Read CGPA File (Supports CSV & Excel) ---
+    def read_cgpa_map(self, file_path):
+        if not file_path or not os.path.exists(file_path):
+            return {}
+        try:
+            print(f"Reading CGPA file: {os.path.basename(file_path)}")
+            
+            # CHECK EXTENSION AND READ ACCORDINGLY
+            is_csv = file_path.lower().endswith('.csv')
+            if is_csv:
+                df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path)
+            
+            # Helper to find columns
+            def find_cols(dataframe):
+                cols = dataframe.columns.astype(str).str.strip().str.lower()
+                r = next((c for c in dataframe.columns if any(x in str(c).lower() for x in ['roll', 'reg', 'usn'])), None)
+                c = next((c for c in dataframe.columns if any(x in str(c).lower() for x in ['cgpa', 'sgpa', 'gpa', 'mark'])), None)
+                return r, c
 
+            roll_col, cgpa_col = find_cols(df)
+
+            # Retry Logic: If not found, try reading with header=1 (skipping first row)
+            if not roll_col or not cgpa_col:
+                print("Columns not found in first row, trying header=1...")
+                if is_csv:
+                    df = pd.read_csv(file_path, header=1)
+                else:
+                    df = pd.read_excel(file_path, header=1)
+                
+                roll_col, cgpa_col = find_cols(df)
+
+            if not roll_col or not cgpa_col:
+                print(f"Warning: Columns not found in {file_path}")
+                return {}
+
+            # Clean Data
+            df[roll_col] = df[roll_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            return pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
+        except Exception as e:
+            print(f"Error reading CGPA file: {e}")
+            return {}
+
+# --- DATA PROCESSOR ---
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
         try: return (float(marks) / MIDTERM_TOTAL_MARKS) * 100
         except (ValueError, TypeError): return 0
 
-    def process_data(self, all_student_data, subject_name, semester, common_comment):
+    def process_data(self, all_student_data, subject_name, semester, common_comment, cgpa_map=None):
+        cgpa_map = cgpa_map or {}
+
         for student in all_student_data:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip().lower()
             student['Semester'] = str(semester).strip().lower()
-           
-            if not student.get('CGPA (up to previous semester)'):
-                student['CGPA (up to previous semester)'] = None
+            
+            # MERGE LOGIC
+            roll_no = str(student.get('Register Number of the Student', '')).strip()
+            # If found in map, use it. If not, use empty string (so it shows blank in Word)
+            student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '') 
+
             student['Actions taken to improve performance'] = common_comment
         return all_student_data
 
@@ -304,13 +230,11 @@ class StudentDataProcessor:
             final_filtered = [s for s in students if s['MidtermPercentage'] <= slow_thresh]
         else:
             final_filtered = [s for s in students if s['MidtermPercentage'] >= fast_thresh]
-        
         final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
         return final_filtered
 
 # --- REPORT FORMATTERS ---
 class BaseFormatter:
-    FONT_NAME = "Brush Script MT Italic" 
     BODY_FONT = "Times New Roman"
 
     def get_year_semester_string(self, roman_numeral): 
@@ -322,8 +246,7 @@ class BaseFormatter:
         run = p.add_run(str(text))
         run.font.size = Pt(font_size)
         run.bold = bold
-        if font_name: 
-            run.font.name = font_name
+        if font_name: run.font.name = font_name
         p.alignment = getattr(WD_ALIGN_PARAGRAPH, str(align).upper(), WD_ALIGN_PARAGRAPH.LEFT)
         cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper(), WD_ALIGN_VERTICAL.TOP)
     
@@ -398,46 +321,30 @@ class Format1And2DocxFormatter(BaseFormatter):
 # --- FILE WRITERS ---
 class DocxWriter:
     def write(self, doc, output_filename, **kwargs):
-        try:
-            doc.save(output_filename)
-            print(f"\nSuccess! Report generated as '{output_filename}' ✨")
-        except Exception as e:
-            print(f"An error occurred while saving the docx file: {e}")
-            traceback.print_exc()
+        doc.save(output_filename)
+        print(f"Report generated: {output_filename}")
 
 class PdfWriter:
     def write(self, doc, output_filename, sign_info=None, format_choice=None):
-        if not convert:
-            raise ModuleNotFoundError("docx2pdf library is required for PDF output.")
-        
         try:
-            
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_docx = os.path.join(temp_dir, "temp.docx")
                 doc.save(temp_docx)
                 convert(temp_docx, output_filename)
             
-            time.sleep(1) 
+            time.sleep(1)
             if platform.system() == "Darwin": time.sleep(1)
+            print(f"PDF generated: {output_filename}")
 
-            print(f"\nSuccess! PDF generated as '{output_filename}' ✨")
-
-            
             if sign_info and sign_info.get('should_sign') and sign_info.get('image_path'):
-                print("Adding visual signature/header to all pages...")
-                
-                
                 add_image_to_all_pages_fitz(
                     output_filename,
                     sign_info['image_path'],
-                     
                     width=100, 
-                    height=50 
+                    height=50
                 )
 
-            
             if sign_info and sign_info.get('should_sign') and format_choice in ['1', '2', '4', '5']:
-                print("Proceeding to sign PDF...")
                 sign_pdf(
                     pdf_path=output_filename, 
                     key_path=sign_info['key_path'], 
@@ -447,9 +354,8 @@ class PdfWriter:
                 )
 
         except Exception as e:
-            print(f"An error occurred during PDF conversion/signing: {e}")
+            print(f"Error in PDF generation: {e}")
             traceback.print_exc()
-            raise
 
 # --- FACTORIES ---
 def get_writer(output_type):
@@ -463,14 +369,16 @@ def get_formatter(format_choice):
         '3': Format3DocxFormatter(), '4': Format1And2DocxFormatter()
     }
     formatter = formatters.get(format_choice)
-    if not formatter:
-        raise ValueError(f"Invalid format choice: {format_choice}")
+    if not formatter: raise ValueError(f"Invalid format: {format_choice}")
     return formatter
 
 # --- CONTROLLER ---
 class ReportController:
-    def __init__(self, excel_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
-        self.excel_path = excel_path; self.format_choice = format_choice; self.learner_type = learner_type
+    # Updated __init__
+    def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment):
+        self.excel_path = excel_path
+        self.cgpa_path = cgpa_path # <--- Stored
+        self.format_choice = format_choice; self.learner_type = learner_type
         self.slow_threshold = slow_thresh; self.fast_threshold = fast_thresh; self.output_type = output_type
         self.subject = ""; self.semester = semester.lower().strip(); self.sign_info = sign_info
         self.common_comment = common_comment; self.reader = DataReader(); self.processor = StudentDataProcessor()
@@ -480,14 +388,27 @@ class ReportController:
         all_student_data, detected_subject = self.reader.read_data(self.excel_path)
         if not all_student_data: return None
         
+        # 1. READ CGPA
+        cgpa_map = self.reader.read_cgpa_map(self.cgpa_path)
+        
         self.subject = detected_subject.lower().strip()
-        processed_students = self.processor.process_data(all_student_data, self.subject, self.semester, self.common_comment)
+        
+        # 2. PROCESS WITH MAP
+        processed_students = self.processor.process_data(
+            all_student_data, 
+            self.subject, 
+            self.semester, 
+            self.common_comment,
+            cgpa_map=cgpa_map
+        )
+        
         final_filtered_students = self.processor.filter_students(processed_students, self.learner_type, self.slow_threshold, self.fast_threshold)
         
         if not final_filtered_students:
-            print(f"\nNo students found for the selected criteria.")
+            print("No students found.")
             return None
-        print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
+        
+        print(f"Found {len(final_filtered_students)} {self.learner_type} learners.")
         
         date_str = datetime.now().strftime('%d_%m_%y'); base_dir = "Learner_Monitor_Reports"
         learner_folder = f"{self.learner_type.title()}_Learners"; sem_name = self.semester.upper()
@@ -505,12 +426,8 @@ class ReportController:
         output_filename = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_{report_name}_{date_str}.{ext}'
         full_output_path = os.path.join(output_dir, output_filename)
         
-        
-        full_output_path = os.path.abspath(full_output_path)
         self.writer.write(output_object, full_output_path, sign_info=self.sign_info, format_choice=self.format_choice)
-        print("DEBUG: Controller wrote file (absolute path):", full_output_path, os.path.exists(full_output_path))
         return full_output_path
-
     
     def _generate_all_formats(self, students, output_dir, date_str, sem_name, subj_name):
         ext = 'docx' if self.output_type == 'word' else 'pdf'
@@ -525,12 +442,6 @@ class ReportController:
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
         full_path2 = os.path.join(output_dir, summ_fname)
-
-        full_path1 = os.path.abspath(full_path1)
-        self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')
-
-        full_path2 = os.path.abspath(full_path2)
         self.writer.write(doc2, full_path2, sign_info=self.sign_info, format_choice='3')
-        
-        
+
         return [full_path1, full_path2]
