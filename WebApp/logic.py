@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pandas as pd
 import openpyxl
-# fitz is imported but we won't use it for the visual signature anymore
+
 import fitz 
 from docx2pdf import convert
 from endesive import pdf
@@ -35,9 +35,7 @@ SEMESTER_MAPPING = {
     'vii': 'IV Year/ VII semester', 'viii': 'IV Year/ VIII semester',
 }
 
-# --- PDF VISUAL HELPER (UNUSED) ---
-def add_image_to_all_pages_fitz(pdf_path, image_path, x=None, y=None, width=100, height=40):
-    pass
+
 
 # --- PDF SIGNING UTILITY ---
 def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
