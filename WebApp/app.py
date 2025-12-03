@@ -8,7 +8,6 @@ from logic import ReportController
 
 app = Flask(__name__)
 
-# Configure a folder to store temporary uploaded files
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -21,7 +20,7 @@ def index():
 @app.route('/generate-report', methods=['POST'])
 def generate_report():
     try:
-        # 1. Basic File Validation
+        
         if 'excelFile' not in request.files:
             return jsonify({"error": "No Excel file part in the request."}), 400
         
@@ -29,7 +28,7 @@ def generate_report():
         if excel_file.filename == '':
             return jsonify({"error": "No selected Excel file."}), 400
 
-        # 2. Retrieve Basic Form Data
+    
         semester = request.form.get('semester')
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
@@ -48,14 +47,12 @@ def generate_report():
         except ValueError:
              return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
-        # 3. Save Files
-        
-        # A. Main Excel
+    
         filename = secure_filename(excel_file.filename)
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
-        # B. CGPA File
+        
         cgpa_path = None
         cgpa_file = request.files.get('cgpaFile')
         if cgpa_file and cgpa_file.filename != '':
@@ -63,21 +60,20 @@ def generate_report():
             cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
             cgpa_file.save(cgpa_path)
 
-        # C. Signature Image (Save INDEPENDENTLY of crypto signing)
+        
         img_path = None
         img_file = request.files.get('imageFile')
         if img_file and img_file.filename != '':
             img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
             img_file.save(img_path)
 
-        # 4. Construct Sign Info
-        # We pass the image path regardless of whether 'should_sign' is True
+        
         sign_info = {
             'should_sign': False, 
             'image_path': img_path 
         }
 
-        # Check for Cryptographic Signing Checkbox
+        
         if request.form.get('enableSigning') == 'on':
             key_file = request.files.get('keyFile')
             cert_file = request.files.get('certFile')
@@ -99,7 +95,7 @@ def generate_report():
             else:
                 return jsonify({"error": "Digital Signing is enabled but missing keys or certificates."}), 400
 
-        # 5. Initialize Controller
+        
         controller = ReportController(
             excel_path=excel_path,
             cgpa_path=cgpa_path,
@@ -115,16 +111,16 @@ def generate_report():
         )
 
 
-        # 6. Run Generation
+        
         output_path = controller.run()
         
-        # Normalize controller output
+        
         if isinstance(output_path, list):
             output_path = [os.path.abspath(p) for p in output_path]
         else:
             output_path = os.path.abspath(output_path) if output_path else None
 
-        # If list -> zip them
+        
         if isinstance(output_path, list):
             zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
             with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
@@ -133,7 +129,7 @@ def generate_report():
                         zf.write(fpath, arcname=os.path.basename(fpath))
             return send_file(os.path.abspath(zip_path), as_attachment=True)
 
-        # Single file
+        
         if output_path and os.path.exists(output_path):
             return send_file(output_path, as_attachment=True)
         else:

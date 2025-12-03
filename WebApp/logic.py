@@ -13,7 +13,6 @@ from datetime import datetime
 
 import pandas as pd
 import openpyxl
-# fitz is imported but we won't use it for the visual signature anymore
 import fitz 
 from docx2pdf import convert
 from endesive import pdf
@@ -51,7 +50,7 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         with open(pdf_path, 'rb') as f_in: 
             pdf_data = f_in.read()
 
-        # Invisible Crypto Signature
+        
         signdata = {
             'sigflags': 3,
             'contact': 'faculty@example.com',
@@ -168,7 +167,7 @@ class StudentDataProcessor:
         final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
         return final_filtered
 
-# --- REPORT FORMATTERS ---
+
 class BaseFormatter:
     BODY_FONT = "Times New Roman"
     
@@ -198,7 +197,7 @@ class BaseFormatter:
         p = doc_or_cell.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
-    # Try to insert signature image if provided
+    
         if getattr(self, "signature_image_path", None) and os.path.exists(self.signature_image_path):
             try:
                 run = p.add_run()
@@ -207,7 +206,7 @@ class BaseFormatter:
             except Exception as e:
                 print(f"Error inserting signature image: {e}")
 
-    # Add signature underline and label
+   
         p.add_run("\n" + "_" * 40 + "\n")
         label_run = p.add_run("Signature of the\nsubject teacher / class coordinator")
         try:
@@ -216,7 +215,7 @@ class BaseFormatter:
         except Exception:
             pass
 
-    # If requested, print the faculty name (right-aligned) below the signature
+    
         if print_faculty:
             faculty = getattr(self, "faculty_name", None)
             if faculty:
@@ -253,8 +252,7 @@ class BaseFormatter:
         pd_ = fc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(fc)
 
     def _create_format2_content(self, doc, student, slow_threshold, fast_threshold):
-        # --- Dynamic Heading Based on Learner Type (slow vs advanced) ---
-# use a paragraph with Heading style so Word renders it like a heading
+    
         heading = doc.add_paragraph(style='Heading 2')
         heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -264,12 +262,10 @@ class BaseFormatter:
         r4 = heading.add_run("advanced")
         r5 = heading.add_run(" learners")
 
-# make sure font properties are explicitly set (helps ensure character formatting will show)
         for r in (r1, r2, r3, r4, r5):
             r.font.name = self.BODY_FONT
             r.font.size = Pt(14)
 
-# Ensure thresholds and mid are numeric and compute membership
         try:
             mid = float(student.get("MidtermPercentage", 0))
         except Exception:
@@ -284,12 +280,12 @@ class BaseFormatter:
 
         is_slow = mid <= slow_num
 
-# Set underline on the selected run (and explicitly disable underline on the other)
+
         if is_slow:
-            r2.font.underline = True   # underline "slow"
+            r2.font.underline = True
             r4.font.underline = False
         else:
-            r4.font.underline = True   # underline "advanced"
+            r4.font.underline = True
             r2.font.underline = False
 
 
@@ -330,13 +326,12 @@ class Format3DocxFormatter(BaseFormatter):
                 self.set_cell_properties(rc[2], str(row_data.get('Student Name', '')), font_name=self.BODY_FONT); self.set_cell_properties(rc[3], f"{row_data.get('MidtermPercentage', 0):.2f}", font_name=self.BODY_FONT)
                 self.set_cell_properties(rc[4], str(row_data.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.BODY_FONT)
             
-            # --- FOOTER: Date & Signature ONLY ---
-            # --- FOOTER: Date & Signature ONLY ---
+            
             p = doc.add_paragraph()
             p.add_run(f"\nDate: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT
             self.add_signature_line(doc,print_faculty=False)
 
-# --- ensure faculty name is printed right-aligned under the signature for Format 3 ---
+
             faculty = getattr(self, "faculty_name", None)
             if faculty:
                 fn_para = doc.add_paragraph()
@@ -357,14 +352,14 @@ class Format1And2DocxFormatter(BaseFormatter):
     def format(self, students, st, ft):
         doc = Document()
         for i, student in enumerate(students):
-            # Format 1 page
+            
             self._create_format1_content(doc, student, st, ft)
             doc.add_page_break()
 
-            # Format 2 page (with thresholds)
+            
             self._create_format2_content(doc, student, st, ft)
 
-            # Page break between different students
+            
             if i < len(students) - 1:
                 doc.add_page_break()
 
