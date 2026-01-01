@@ -8,3 +8,6 @@
 *.xlsx
 *.docx
 *.pem
+uploads/signature.png
+uploads/signature_clean.png
+WebApp/__pycache__/logic.cpython-313.pyc
