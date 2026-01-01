@@ -1,4 +1,3 @@
-# --- Standard Library Imports ---
 import os
 import tempfile
 import platform
@@ -12,19 +11,14 @@ from PIL import Image
 import io
 import reportlab
 import PIL
-
-
-
-# --- Third-Party Library Imports ---
 import pandas as pd
-import openpyxl  # Required for reading Excel headers
+import openpyxl 
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 MIDTERM_TOTAL_MARKS=30
 
-# Suppress a known warning from PyPDF2
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from PyPDF2 import PdfReader
 
@@ -72,12 +66,13 @@ import fitz
 def add_image_to_all_pages_fitz(pdf_path, image_path, x=450, y=50, width=100, height=40):
     """Adds an image to every page using PyMuPDF."""
     doc = fitz.open(pdf_path)
-    for page in doc:
+    for page_index in range(1,len(doc)):
+        page=doc[page_index]
         page.insert_image(
             fitz.Rect(x, y, x + width, y + height),
             filename=image_path
         )
-    doc.saveIncr()  # saves changes without recreating file
+    doc.saveIncr() 
     print(f"✅ Image added to all pages using PyMuPDF: {pdf_path}")
 
 
@@ -93,29 +88,29 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         return
 
     try:
-        # Define the visible signature box (x1, y1, x2, y2) on FIRST page
-        signature_box = (435, 72, 540, 105)  # Adjust as needed
+        signature_box = (435, 72, 540, 105)
+        sig_x, sig_y, sig_w, sig_h = 435, 72, 100, 40
 
-        # Timestamp in PDF format
+        
         date = datetime.now().strftime("D:%Y%m%d%H%M%S+05'30'")
 
-        # Load private key and certificate
+
         with open(key_path, 'rb') as f:
             private_key = load_pem_private_key(f.read(), password=password.encode('utf-8'))
 
         with open(cert_path, 'rb') as f:
             certificate = load_pem_x509_certificate(f.read())
 
-        # Read PDF bytes
+    
         with open(pdf_path, 'rb') as f:
             pdf_data = f.read()
 
-        # Confirm page count (optional)
+       
         reader = PdfReader(pdf_path)
         page_count = len(reader.pages)
         print(f"PDF has {page_count} pages. Applying digital signature on page 1 only.")
 
-        # Metadata for signature
+        
         signdata = {
             'sigflags': 3,
             'contact': 'faculty.email@example.com',
@@ -124,10 +119,10 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             'signaturebox': signature_box,
             'signature_img': image_path,
             'signingdate': date,
-            'page': 0,  # 0 = first page
+            'page': 0,
         }
 
-        # Apply a single digital signature
+        
         signed_pdf_bytes = pdf.cms.sign(
             pdf_data,
             signdata,
@@ -136,16 +131,16 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             othercerts=(),
         )
 
-        # Write final signed PDF
+        
         with open(pdf_path, 'wb') as f:
             f.write(pdf_data + signed_pdf_bytes)
 
         print("\n✅ Success! PDF digitally signed on page 1 only.\n")
-        return True
+        return True,  (sig_x,sig_y,sig_w,sig_h)
     except Exception:
         print("\n❌ Failed to sign the PDF.")
         traceback.print_exc()
-        return False
+        return False, None
 
 
 
@@ -155,14 +150,14 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
 class DataReader:
     """Reads data from an Excel or CSV file and returns it in a neutral format."""
 
-    # --- UPDATED Column Mapping ---
+    
     COLUMN_MAPPING = {
-        # --- Mappings from your file ---
+       
         'Roll Number': 'Register Number of the Student',
         'Student Name': 'Student Name',
         'Total (30) *': 'Midterm Exam Marks (Out of 30)',
 
-        # --- Mappings for other potential columns ---
+        
         'CGPA': 'CGPA (up to previous semester)',
         'Actions': 'Actions taken to improve performance',
         'Outcome': 'Outcome (Based on clearance in end-semester or makeup exam)',
@@ -171,19 +166,17 @@ class DataReader:
         'Subject': 'Subject Name'
     }
 
-    # --- UPDATED Subject Header Extractor ---
+    
     def _extract_subject_from_header(self, file_path):
         try:
             wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
             sheet = wb.active
             
-            # Data is in cell B1, e.g., "Exam: ... / COMPUTER NETWORKS [CSE 3124]"
-            subject_name_raw = sheet['B1'].value
+            
+            subject_name_raw = sheet['A1'].value
             
             if subject_name_raw:
-                # Get the last part after the final '/'
                 subject_name = str(subject_name_raw).split('/')[-1].strip()
-                # Optional: clean up brackets if they exist
                 subject_name = subject_name.split('[')[0].strip()
                 return subject_name
             return None
@@ -198,7 +191,6 @@ class DataReader:
             subject_name = input("Could not auto-detect subject. Please enter Subject Name manually: ")
 
         try:
-            # --- UPDATED skiprows to 1 ---
             df = pd.read_excel(file_path, skiprows=2)
             
             df.columns = df.columns.str.strip()
@@ -244,7 +236,6 @@ class DocxWriter:
             **kwargs: Optional keyword arguments for future extensibility.
         """
         try:
-            # Attempt to save the document
             doc.save(output_filename)
             print(f"\n✅ Success! Report generated as '{output_filename}' ✨")
 
@@ -266,7 +257,6 @@ class PdfWriter:
             return
 
         try:
-            # --- Step 1: Convert DOCX → PDF ---
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_docx = os.path.join(temp_dir, "temp_report.docx")
                 doc.save(temp_docx)
@@ -274,16 +264,16 @@ class PdfWriter:
 
             time.sleep(2)
 
-            if platform.system() == "Darwin":  # macOS workaround
+            if platform.system() == "Darwin":
                 time.sleep(1)
 
             print(f"\n✅ Success! PDF generated as '{output_filename}' ✨")
 
-            # --- Step 2: Digital Signature (if required) ---
+
             if sign_info and sign_info.get('should_sign'):
                 if format_choice in ['1', '2', '4', '5']:
                     print("Proceeding to sign the PDF...")
-                    success = sign_pdf(
+                    success, coords = sign_pdf(
                         pdf_path=output_filename,
                         key_path=sign_info['key_path'],
                         cert_path=sign_info['cert_path'],
@@ -291,13 +281,16 @@ class PdfWriter:
                         password=sign_info['password']
                     )
 
-                    # ✅ Step 3: Only add image to all pages if signature succeeded
                     if success:
                         print("Adding image to all pages (since signature succeeded)...")
+                        if coords:
+                            x,y,w,h= 435, 72, 100, 40
+                        else:
+                            x,y,w,h= 435, 72, 100, 40
                         add_image_to_all_pages_fitz(
                             output_filename,
                             sign_info['image_path'],
-                            x=435,  # adjust placement if needed
+                            x=435,
                             y=72,
                             width=100,
                             height=40
@@ -316,7 +309,6 @@ class BaseFormatter:
     """Base class for all formatters with shared helper methods."""
     COMIC_SANS = "Brush Script MT Italic"
     
-    # --- ADDED Font Name ---
     FONT_NAME = "Times New Roman" 
 
     def get_year_semester_string(self, roman_numeral):
@@ -490,7 +482,7 @@ class StudentDataProcessor:
         except (ValueError, TypeError):
             return 0
             
-    # --- UPDATED process_data method ---
+
     def process_data(self, all_student_data, common_comment, subject_name, semester):
         """
         Processes student data, calculates percentages, and adds common actions.
@@ -502,25 +494,24 @@ class StudentDataProcessor:
                 student.get('Midterm Exam Marks (Out of 30)')
             )
             
-            # --- FIX: Manually inject subject and semester ---
+          
             student['Subject Name'] = subject_name
             student['Semester'] = semester
             
-            # --- Logic to add the common comment ---
+           
             if common_comment:
                 existing_actions = str(student.get(learner_action_key, '')).strip()
                 if existing_actions:
-                    # Append if actions already exist
+                   
                     student[learner_action_key] = f"{existing_actions}; {common_comment}"
                 else:
-                    # Set if no actions exist
+                   
                     student[learner_action_key] = common_comment
                     
         return all_student_data
         
     def filter_students(self, students, semester, subject, learner_type, slow_thresh, fast_thresh):
-        # Filter by course/semester is now redundant since it's injected,
-        # but we keep it for potential future use cases.
+        
         filtered_by_course = [
             s for s in students if
             (semester == 'all' or s['Semester'] == semester) and
@@ -563,19 +554,18 @@ class ReportController:
         if not all_student_data:
             return
         
-        # Use auto-detected subject. self.semester is from user input
+        
         self.subject = detected_subject.lower().strip()
 
-        # --- UPDATED call to process_data ---
+    
         processed_students = self.processor.process_data(
             all_student_data, self.common_comment, self.subject, self.semester
         )
         
-        # Now we filter based on the data we just injected
         final_filtered_students = self.processor.filter_students(
             processed_students,
-            self.semester,  # Use the semester from user input
-            self.subject,   # Use the subject from the file header
+            self.semester, 
+            self.subject, 
             self.learner_type,
             self.slow_threshold,
             self.fast_threshold
@@ -588,14 +578,13 @@ class ReportController:
 
         print(f"\nFound {len(final_filtered_students)} {self.learner_type} learners.")
         
-        # --- Create dynamic output directory structure ---
         date_str = datetime.now().strftime('%d_%m_%y')
         base_dir = "Learner Monitor Reports"
         learner_folder = f"{self.learner_type.title()} Learners"
         
         semester_name_for_file = self.semester.upper()
         subject_name_for_file = self.subject.replace(' ', '_').title()
-        subject_name_for_file = re.sub(r'[\\/*?:"<>|]', "", subject_name_for_file) # Remove illegal chars
+        subject_name_for_file = re.sub(r'[\\/*?:"<>|]', "", subject_name_for_file)
 
         output_dir = os.path.join(base_dir, learner_folder, f"Semester_{semester_name_for_file}", subject_name_for_file)
         os.makedirs(output_dir, exist_ok=True)
@@ -617,13 +606,11 @@ class ReportController:
     def _generate_all_formats(self, students, output_dir, date_str, semester_name_for_file, subject_name_for_file):
         file_extension = 'docx' if self.output_type == 'word' else 'pdf'
         
-        # Combined Report (Format 1 & 2)
         combined_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{file_extension}'
         f1_and_2_formatter = Format1And2DocxFormatter()
         doc1 = f1_and_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
         self.writer.write(doc1, os.path.join(output_dir, combined_filename), sign_info=self.sign_info, format_choice='4') # Sign as if format 4
 
-        # Summary Report (Format 3)
         summary_filename = f'{subject_name_for_file}_{semester_name_for_file}_{self.learner_type.title()}Learner_Summary_Report_{date_str}.{file_extension}'
         f3_formatter = Format3DocxFormatter()
         doc2 = f3_formatter.format(students, self.slow_threshold, self.fast_threshold)
@@ -640,7 +627,7 @@ def get_valid_input(prompt, valid_options=None, input_type=str):
              print("This field cannot be empty.")
              continue
         if not user_input and input_type is str:
-             return user_input # Allow empty string for manual subject input
+             return user_input
         try:
             converted_input = input_type(user_input)
             if valid_options and str(converted_input) not in valid_options:

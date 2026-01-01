@@ -1,10 +1,4 @@
-# ==============================================================================
-# REPORT GENERATION LOGIC LIBRARY
-#
-# This file contains all the core classes and functions for processing data
-# and generating reports. It is designed to be imported and used by a
-# controller, such as a web application or a command-line script.
-# ==============================================================================
+
 
 import os
 import tempfile

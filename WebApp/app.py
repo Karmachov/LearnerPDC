@@ -2,11 +2,11 @@ import os
 import traceback
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
-from logic import ReportController # Import the controller from our logic file
+from logic import ReportController
 
 app = Flask(__name__)
 
-# Configure a folder to store temporary uploaded files
+
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -30,7 +30,7 @@ def generate_report():
         if excel_file.filename == '':
             return jsonify({"error": "No selected Excel file."}), 400
 
-        # Safely get form data
+    
         semester = request.form.get('semester')
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
@@ -57,7 +57,7 @@ def generate_report():
             fast_thresh=fast_thresh,
             output_type=output_type,
             semester=semester,
-            sign_info={'should_sign': False}, # Signing is not supported in this UI
+            sign_info={'should_sign': False}, 
             common_comment=comment
         )
 
