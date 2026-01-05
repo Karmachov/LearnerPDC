@@ -1,0 +1,11 @@
+Flask
+pandas
+openpyxl
+python-docx
+endesive
+cryptography
+PyMuPDF
+PyPDF2
+werkzeug
+requests
+asn1crypto

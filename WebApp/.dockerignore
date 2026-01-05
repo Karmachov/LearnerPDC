@@ -1,0 +1,9 @@
+__pycache__
+.venv
+.git
+.DS_Store
+uploads/
+Learner_Monitor_Reports/
+*.zip
+*.pdf
+*.docx
