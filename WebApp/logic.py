@@ -342,7 +342,8 @@ class PdfWriter:
                 if os.path.exists(generated_pdf):
                     if os.path.exists(output_filename):
                         os.remove(output_filename)
-                    os.rename(generated_pdf, output_filename)
+                    import shutil
+                    shutil.move(generated_pdf, output_filename)
                     print(f"PDF generated: {output_filename}")
                 else:
                     raise Exception(f"LibreOffice failed. Path used: {libre_cmd}")

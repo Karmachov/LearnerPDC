@@ -106,8 +106,9 @@ def generate_report():
             fast_thresh=fast_thresh,
             output_type=output_type,
             semester=semester,
-            sign_info={'should_sign': False}, # Signing is not supported in this UI
-            common_comment=comment
+            sign_info=sign_info,
+            common_comment=comment,
+            faculty_name=faculty_name
         )
 
 
