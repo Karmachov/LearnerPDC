@@ -11,3 +11,15 @@
 uploads/signature.png
 uploads/signature_clean.png
 WebApp/__pycache__/logic.cpython-313.pyc
+
+# Ignore uploaded student data and keys
+uploads/*
+!uploads/.gitkeep
+
+# Ignore generated reports
+Learner_Monitor_Reports/
+
+# Ignore environment variables and python cache
+.env
+__pycache__/
+*.pyc

@@ -2,6 +2,7 @@ import os
 import traceback
 import time
 import zipfile
+import shutil
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.utils import secure_filename
 from logic import ReportController
@@ -13,6 +14,18 @@ UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+def cleanup_uploads(folder):
+    """Deletes all files in the upload folder to ensure data privacy."""
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print(f'Failed to delete {file_path}. Reason: {e}')
+
 @app.route('/')
 def index():
     """Render the main HTML page."""
@@ -21,7 +34,6 @@ def index():
 @app.route('/generate-report', methods=['POST'])
 def generate_report():
     try:
-        
         if 'excelFile' not in request.files:
             return jsonify({"error": "No Excel file part in the request."}), 400
         
@@ -29,7 +41,7 @@ def generate_report():
         if excel_file.filename == '':
             return jsonify({"error": "No selected Excel file."}), 400
 
-    
+        # Extract form data
         semester = request.form.get('semester')
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
@@ -48,12 +60,12 @@ def generate_report():
         except ValueError:
              return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
-    
+        # Save main excel file
         filename = secure_filename(excel_file.filename)
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
-        
+        # Handle CGPA file
         cgpa_path = None
         cgpa_file = request.files.get('cgpaFile')
         if cgpa_file and cgpa_file.filename != '':
@@ -61,20 +73,16 @@ def generate_report():
             cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
             cgpa_file.save(cgpa_path)
 
-        
+        # Handle Visual Signature
         img_path = None
         img_file = request.files.get('imageFile')
         if img_file and img_file.filename != '':
             img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img_file.filename))
             img_file.save(img_path)
 
-        
-        sign_info = {
-            'should_sign': False, 
-            'image_path': img_path 
-        }
+        sign_info = {'should_sign': False, 'image_path': img_path}
 
-        
+        # Handle Digital Signing
         if request.form.get('enableSigning') == 'on':
             key_file = request.files.get('keyFile')
             cert_file = request.files.get('certFile')
@@ -83,7 +91,6 @@ def generate_report():
             if all([key_file, cert_file]):
                 key_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(key_file.filename))
                 cert_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(cert_file.filename))
-                
                 key_file.save(key_path)
                 cert_file.save(cert_path)
 
@@ -94,9 +101,8 @@ def generate_report():
                     'password': password
                 })
             else:
-                return jsonify({"error": "Digital Signing is enabled but missing keys or certificates."}), 400
+                return jsonify({"error": "Digital Signing is enabled but missing keys."}), 400
 
-        
         controller = ReportController(
             excel_path=excel_path,
             cgpa_path=cgpa_path,
@@ -111,34 +117,33 @@ def generate_report():
             faculty_name=faculty_name
         )
 
-
-        
         output_path = controller.run()
         
-        
-        if isinstance(output_path, list):
-            output_path = [os.path.abspath(p) for p in output_path]
-        else:
-            output_path = os.path.abspath(output_path) if output_path else None
+        if not output_path:
+            return jsonify({"error": "Report generation failed."}), 500
 
-        
+        # Handle ZIP for multiple files
         if isinstance(output_path, list):
-            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{semester}_{learner_type}_{int(time.time())}.zip")
+            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{int(time.time())}.zip")
             with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for fpath in output_path:
                     if os.path.exists(fpath):
                         zf.write(fpath, arcname=os.path.basename(fpath))
-            return send_file(os.path.abspath(zip_path), as_attachment=True)
+            
+            # Send file then cleanup
+            response = send_file(os.path.abspath(zip_path), as_attachment=True)
+            cleanup_uploads(app.config['UPLOAD_FOLDER'])
+            return response
 
-        
-        if output_path and os.path.exists(output_path):
-            return send_file(output_path, as_attachment=True)
-        else:
-            return jsonify({"error": "Report generation failed."}), 500
+        # Send single file then cleanup
+        response = send_file(os.path.abspath(output_path), as_attachment=True)
+        cleanup_uploads(app.config['UPLOAD_FOLDER'])
+        return response
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"An unexpected server error occurred: {str(e)}"}), 500
+        cleanup_uploads(app.config['UPLOAD_FOLDER'])
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0',debug=True, port=5001)
+    app.run(host='0.0.0.0', debug=True, port=5001)
