@@ -1,5 +1,7 @@
 import os
 import traceback
+import re
+from datetime import datetime
 import time
 import zipfile
 import shutil
@@ -14,11 +16,21 @@ UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-def cleanup_uploads(folder):
+def cleanup_uploads(folder, exclude=None):
     """Deletes all files in the upload folder to ensure data privacy."""
+    if exclude is None:
+        exclude = set()
+    else:
+        # Normalize paths to absolute for comparison
+        exclude = set(os.path.abspath(p) for p in exclude)
+
     for filename in os.listdir(folder):
         file_path = os.path.join(folder, filename)
         try:
+            # Check if this file is in the exclude list
+            if os.path.abspath(file_path) in exclude:
+                continue
+                
             if os.path.isfile(file_path) or os.path.islink(file_path):
                 os.unlink(file_path)
             elif os.path.isdir(file_path):
@@ -124,7 +136,12 @@ def generate_report():
 
         # Handle ZIP for multiple files
         if isinstance(output_path, list):
-            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], f"reports_{int(time.time())}.zip")
+            # Construct the zip filename
+            # Format: SubjectCode_SubjectName_Semester_LearnerType_ddmmyyyy_HHMMSS.zip
+            clean_subject = re.sub(r'[^\w\-]', '_', controller.subject).strip('_')
+            timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
+            zip_filename = f"{clean_subject}_{semester}_{learner_type.title()}_{timestamp}.zip"
+            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], zip_filename)
             with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for fpath in output_path:
                     if os.path.exists(fpath):
@@ -132,12 +149,12 @@ def generate_report():
             
             # Send file then cleanup
             response = send_file(os.path.abspath(zip_path), as_attachment=True)
-            cleanup_uploads(app.config['UPLOAD_FOLDER'])
+            cleanup_uploads(app.config['UPLOAD_FOLDER'], exclude=[zip_path])
             return response
 
         # Send single file then cleanup
         response = send_file(os.path.abspath(output_path), as_attachment=True)
-        cleanup_uploads(app.config['UPLOAD_FOLDER'])
+        cleanup_uploads(app.config['UPLOAD_FOLDER'], exclude=[output_path])
         return response
 
     except Exception as e:
