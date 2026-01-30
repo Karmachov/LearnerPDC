@@ -179,9 +179,9 @@ class StudentDataProcessor:
 
     def filter_students(self, students, learner_type, slow_thresh, fast_thresh):
         if learner_type == 'slow':
-            final_filtered = [s for s in students if s['MidtermPercentage'] <= slow_thresh]
+            final_filtered = [s for s in students if s['MidtermPercentage'] < slow_thresh]
         else:
-            final_filtered = [s for s in students if s['MidtermPercentage'] >= fast_thresh]
+            final_filtered = [s for s in students if s['MidtermPercentage'] > fast_thresh]
         final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
         return final_filtered
 
