@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
 
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 
@@ -192,6 +192,7 @@ class BaseFormatter:
     def __init__(self):
         self.signature_image_path = None
         self.faculty_name = None
+        self.learner_type = None
 
     def get_year_semester_string(self, roman_numeral): 
         return SEMESTER_MAPPING.get(str(roman_numeral).strip().lower(), str(roman_numeral))
@@ -241,11 +242,46 @@ class BaseFormatter:
         self.set_cell_properties(pt.cell(0, 0), 'Sr. No.', bold=True, align='CENTER'); self.set_cell_properties(pt.cell(0, 1), 'Parameter', bold=True, align='CENTER'); self.set_cell_properties(pt.cell(0, 2), 'Weightage in Percentage', bold=True, align='CENTER')
         self.set_cell_properties(pt.cell(1, 0), '1', align='CENTER'); self.set_cell_properties(pt.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:"); self.set_cell_properties(pt.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.BODY_FONT); self.set_cell_properties(pt.cell(1, 3), "> %", align='CENTER')
         self.set_cell_properties(pt.cell(2, 0), '2', align='CENTER'); self.set_cell_properties(pt.cell(2, 1), 'Performance of students in preceding university examination'); self.set_cell_properties(pt.cell(2, 2), str(student.get('CGPA (up to previous semester)', '')), align='CENTER', font_name=self.BODY_FONT); self.set_cell_properties(pt.cell(2, 3), "> %", align='CENTER')
-        ct.cell(3, 0).text = "Total Weightage"; fc = ct.cell(4, 0); fc.add_paragraph(f"1. Midterm score less than {slow_threshold}% considered as a slow learner"); fc.add_paragraph(f"2. Midterm score more than {fast_threshold}% considered as an advanced learner **")
+        ct.cell(3, 0).text = "Total Weightage"; fc = ct.cell(4, 0)
+        
+        # Note 1
+        p1 = fc.add_paragraph()
+        p1.add_run(f"1. Midterm score less than {slow_threshold}% considered as a ")
+        r1 = p1.add_run("slow learner")
+        if self.learner_type == 'slow':
+            r1.font.color.rgb = RGBColor(255, 0, 0)
+            r1.font.underline = True
+        
+        # Note 2
+        p2 = fc.add_paragraph()
+        p2.add_run(f"2. Midterm score more than {fast_threshold}% considered as an ")
+        r2 = p2.add_run("advanced learner")
+        if self.learner_type == 'fast':
+            r2.font.color.rgb = RGBColor(255, 0, 0)
+            r2.font.underline = True
+        p2.add_run(" **")
         pd_ = fc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(fc)
 
     def _create_format2_content(self, doc, student):
-        doc.add_heading('Format -2 Report of performance/ improvement for slow and advanced learners', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Header with styled runs
+        h = doc.add_paragraph()
+        h.style = 'Heading 2'
+        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        h.add_run('Format -2 Report of performance/ improvement for ')
+        
+        r1 = h.add_run('slow')
+        if self.learner_type == 'slow':
+            r1.font.color.rgb = RGBColor(255, 0, 0)
+            r1.font.underline = True
+        
+        h.add_run(' and ')
+        
+        r2 = h.add_run('advanced')
+        if self.learner_type == 'fast':
+            r2.font.color.rgb = RGBColor(255, 0, 0)
+            r2.font.underline = True
+        
+        h.add_run(' learners')
         ht = doc.add_table(rows=1, cols=1); self._add_document_header(ht.cell(0,0))
         ct = doc.add_table(rows=8, cols=2); ct.style = 'Table Grid'
         self.set_cell_properties(ct.cell(0, 0), '1. Registration Number'); self.set_cell_properties(ct.cell(0, 1), student.get('Register Number of the Student', ''), font_name=self.BODY_FONT)
@@ -407,6 +443,7 @@ class ReportController:
         if self.sign_info and self.sign_info.get('image_path'):
             formatter.signature_image_path = self.sign_info.get('image_path')
         formatter.faculty_name = self.faculty_name
+        formatter.learner_type = self.learner_type
 
         output_object = formatter.format(final_filtered_students, self.slow_threshold, self.fast_threshold)
         ext = 'docx' if self.output_type == 'word' else 'pdf'
@@ -423,6 +460,7 @@ class ReportController:
 
         comb_fname = f'{subj_name}_{sem_name}_{self.learner_type.title()}Learner_Combined_Report_{date_str}.{ext}'
         f1_2_formatter = Format1And2DocxFormatter(); f1_2_formatter.signature_image_path = sig_path; f1_2_formatter.faculty_name = self.faculty_name
+        f1_2_formatter.learner_type = self.learner_type
         doc1 = f1_2_formatter.format(students, self.slow_threshold, self.fast_threshold)
         full_path1 = os.path.join(output_dir, comb_fname)
         self.writer.write(doc1, full_path1, sign_info=self.sign_info, format_choice='4')
