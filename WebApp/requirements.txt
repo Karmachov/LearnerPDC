@@ -9,3 +9,4 @@ PyPDF2
 werkzeug
 requests
 asn1crypto
+xlrd
