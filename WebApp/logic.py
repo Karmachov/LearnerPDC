@@ -125,14 +125,35 @@ class DataReader:
             return {}
         except Exception: return {}
 
+    def read_grade_map(self, file_path):
+        if not file_path or not os.path.exists(file_path): return {}
+        try:
+            engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
+            if file_path.lower().endswith('.csv'): df = pd.read_csv(file_path)
+            else: df = pd.read_excel(file_path, engine=engine)
+            
+            df.columns = df.columns.astype(str).str.strip()
+            # Find columns
+            enroll_col = next((c for c in df.columns if "Enrollment No" in c or "Roll" in c), None)
+            grade_col = next((c for c in df.columns if "Grade" in c), None)
+
+            if enroll_col and grade_col:
+                df[enroll_col] = df[enroll_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+            return {}
+        except Exception: 
+            traceback.print_exc()
+            return {}
+
 # --- DATA PROCESSOR ---
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
         try: return (float(marks) / MIDTERM_TOTAL_MARKS) * 100
         except: return 0
 
-    def process_data(self, all_student_data, subject_name, semester, common_comment, cgpa_map=None):
+    def process_data(self, all_student_data, subject_name, semester, common_comment, cgpa_map=None, grade_map=None):
         cgpa_map = cgpa_map or {}
+        grade_map = grade_map or {}
         for student in all_student_data:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip()
@@ -140,13 +161,23 @@ class StudentDataProcessor:
             roll_no = str(student.get('Register Number of the Student', '')).strip()
             student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '') 
             student['Actions taken to improve performance'] = common_comment
+            
+            # Progress Logic
+            grade = str(grade_map.get(roll_no, '')).strip().upper()
+            if grade == 'F':
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
+            elif grade and grade != 'NAN':
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
+            else:
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = '' # Or keep existing logic if any
+
         return all_student_data
 
-    def filter_students(self, students, learner_type, slow_thresh, fast_thresh):
+    def filter_students(self, students, learner_type, slow_thresh, advanced_thresh):
         if learner_type == 'slow':
             final_filtered = [s for s in students if s['MidtermPercentage'] < slow_thresh]
         else:
-            final_filtered = [s for s in students if s['MidtermPercentage'] > fast_thresh]
+            final_filtered = [s for s in students if s['MidtermPercentage'] > advanced_thresh]
         final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
         return final_filtered
 
@@ -201,13 +232,13 @@ class BaseFormatter:
         p1 = fc.add_paragraph(); p1.add_run(f"1. Midterm score less than {slow_threshold}% considered as a ")
         r1 = p1.add_run("slow learner"); (self.learner_type == 'slow') and (setattr(r1.font, 'underline', True), setattr(r1.font.color, 'rgb', RGBColor(255, 0, 0)))
         p2 = fc.add_paragraph(); p2.add_run(f"2. Midterm score more than {fast_threshold}% considered as an ")
-        r2 = p2.add_run("advanced learner"); (self.learner_type == 'fast') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
+        r2 = p2.add_run("advanced learner"); (self.learner_type == 'advanced') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
         p2.add_run(" **"); pd_ = fc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(fc)
 
     def _create_format2_content(self, doc, student):
         h = doc.add_paragraph(); h.style = 'Heading 2'; h.alignment = WD_ALIGN_PARAGRAPH.CENTER; h.add_run('Format -2 Report of performance/ improvement for ')
         r1 = h.add_run('slow'); (self.learner_type == 'slow') and (setattr(r1.font, 'underline', True), setattr(r1.font.color, 'rgb', RGBColor(255, 0, 0)))
-        h.add_run(' and '); r2 = h.add_run('advanced'); (self.learner_type == 'fast') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
+        h.add_run(' and '); r2 = h.add_run('advanced'); (self.learner_type == 'advanced') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
         h.add_run(' learners')
         ht = doc.add_table(rows=1, cols=1); self._add_document_header(ht.cell(0,0))
         ct = doc.add_table(rows=8, cols=2); ct.style = 'Table Grid'
@@ -239,10 +270,28 @@ class Format3DocxFormatter(BaseFormatter):
     def format(self, students, st, ft):
         doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) or setattr(sec, 'bottom_margin', Inches(0.5)) or setattr(sec, 'left_margin', Inches(0.5)) or setattr(sec, 'right_margin', Inches(0.5)) for sec in doc.sections]
         if not students:
-            p = doc.add_heading('Summary Report - Student Performance', level=2); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            doc.add_paragraph("\n" + "="*40); notice = doc.add_paragraph(); run = notice.add_run("NOTICE: NO STUDENTS IDENTIFIED"); run.bold = True; run.font.size = Pt(12)
-            doc.add_paragraph(f"Based on the midterm thresholds (Slow: {st}%, Advanced: {ft}%), no students currently fall into this category.")
-            pd_ = doc.add_paragraph(); pd_.add_run(f"\nDate of Review: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(doc); return doc
+            # Generate header info even if empty
+            if hasattr(self, 'subject') and hasattr(self, 'semester'):
+                doc.add_paragraph(f"Course: {str(self.subject).upper()}", style='Heading 3')
+                doc.add_paragraph(f"Year /Semester: {self.get_year_semester_string(self.semester)}", style='Heading 3')
+            
+            sc = ['Sl. No', 'Reg Number', 'Name of the student', 'Midterm Percentage', 'Progress']
+            t = doc.add_table(rows=1, cols=len(sc)); t.style = 'Table Grid'
+            for j, col_name in enumerate(sc): self.set_cell_properties(t.cell(0, j), col_name, bold=True)
+
+            # Generate 8 empty rows
+            for i in range(8):
+                rc = t.add_row().cells
+                self.set_cell_properties(rc[0], str(i + 1), font_name=self.BODY_FONT) # Sl. No
+                self.set_cell_properties(rc[1], "", font_name=self.BODY_FONT)
+                # 4th row (index 3), "Name of the student" column (index 2) gets NIL
+                txt = "NIL" if i == 3 else ""
+                align = 'CENTER' if i == 3 else 'LEFT'
+                self.set_cell_properties(rc[2], txt, font_name=self.BODY_FONT, align=align)
+                self.set_cell_properties(rc[3], "", font_name=self.BODY_FONT)
+                self.set_cell_properties(rc[4], "", font_name=self.BODY_FONT)
+
+            pd_ = doc.add_paragraph(); pd_.add_run(f"\nDate: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(doc); return doc
         
         df = pd.DataFrame(students); grouped = df.groupby(['Subject Name', 'Semester'])
         for i, ((subject, semester), group) in enumerate(grouped):
@@ -289,9 +338,9 @@ def get_formatter(fc):
 
 # --- CONTROLLER ---
 class ReportController:
-    def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh, fast_thresh, output_type, semester, sign_info, common_comment, faculty_name=None):
-        self.excel_path = excel_path; self.cgpa_path = cgpa_path; self.format_choice = format_choice; self.learner_type = learner_type
-        self.slow_threshold = slow_thresh; self.fast_threshold = fast_thresh; self.output_type = output_type; self.semester = semester.lower().strip()
+    def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh, advanced_thresh, output_type, semester, sign_info, common_comment, grade_path=None, faculty_name=None):
+        self.excel_path = excel_path; self.cgpa_path = cgpa_path; self.grade_path = grade_path; self.format_choice = format_choice; self.learner_type = learner_type
+        self.slow_threshold = slow_thresh; self.advanced_threshold = advanced_thresh; self.output_type = output_type; self.semester = semester.lower().strip()
         self.sign_info = sign_info; self.common_comment = common_comment; self.faculty_name = faculty_name
         self.reader = DataReader(); self.processor = StudentDataProcessor(); self.writer = get_writer(output_type)
 
@@ -303,8 +352,9 @@ class ReportController:
         self.subject = subj 
         
         cg_map = self.reader.read_cgpa_map(self.cgpa_path)
-        processed = self.processor.process_data(all_data, self.subject, self.semester, self.common_comment, cg_map)
-        filtered = self.processor.filter_students(processed, self.learner_type, self.slow_threshold, self.fast_threshold)
+        grade_map = self.reader.read_grade_map(self.grade_path)
+        processed = self.processor.process_data(all_data, self.subject, self.semester, self.common_comment, cg_map, grade_map)
+        filtered = self.processor.filter_students(processed, self.learner_type, self.slow_threshold, self.advanced_threshold)
         
         act_f = self.format_choice; is_e = False
         if not filtered: act_f = '3'; is_e = True
@@ -320,9 +370,13 @@ class ReportController:
         fmt = get_formatter(act_f)
         fmt.signature_image_path = self.sign_info.get('image_path')
         fmt.faculty_name = self.faculty_name
+        fmt.signature_image_path = self.sign_info.get('image_path')
+        fmt.faculty_name = self.faculty_name
         fmt.learner_type = self.learner_type
+        fmt.subject = self.subject
+        fmt.semester = self.semester
         
-        obj = fmt.format(filtered, self.slow_threshold, self.fast_threshold)
+        obj = fmt.format(filtered, self.slow_threshold, self.advanced_threshold)
         ext = 'docx' if self.output_type == 'word' else 'pdf'
         lbl = {'1':'Format1', '2':'Format2', '3':'Summary', '4':'Combined'}.get(act_f, "Report") if not is_e else "Empty_Summary"
         out_p = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_{lbl}_{ds}.{ext}')
@@ -334,9 +388,10 @@ class ReportController:
         # Combined
         f12 = Format1And2DocxFormatter(); f12.signature_image_path = self.sign_info.get('image_path'); f12.faculty_name = self.faculty_name; f12.learner_type = self.learner_type
         p1 = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_Combined_{ds}.{ext}')
-        self.writer.write(f12.format(students, self.slow_threshold, self.fast_threshold), p1, sign_info=self.sign_info, format_choice='4')
+        self.writer.write(f12.format(students, self.slow_threshold, self.advanced_threshold), p1, sign_info=self.sign_info, format_choice='4')
         # Summary
         f3 = Format3DocxFormatter(); f3.signature_image_path = self.sign_info.get('image_path'); f3.faculty_name = self.faculty_name
+        f3.subject = self.subject; f3.semester = self.semester
         p2 = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_Summary_{ds}.{ext}')
-        self.writer.write(f3.format(students, self.slow_threshold, self.fast_threshold), p2, sign_info=self.sign_info, format_choice='3')
+        self.writer.write(f3.format(students, self.slow_threshold, self.advanced_threshold), p2, sign_info=self.sign_info, format_choice='3')
         return [p1, p2]

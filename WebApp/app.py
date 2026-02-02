@@ -59,16 +59,16 @@ def generate_report():
         comment = request.form.get('comment')
         faculty_name = request.form.get('facultyName')
         slow_thresh_str = request.form.get('slowThreshold')
-        fast_thresh_str = request.form.get('fastThreshold')
+        advanced_thresh_str = request.form.get('advancedThreshold')
         format_choice = request.form.get('formatChoice')
         output_type = request.form.get('outputType')
 
-        if not all([semester, learner_type, comment, slow_thresh_str, fast_thresh_str, format_choice, output_type]):
+        if not all([semester, learner_type, comment, slow_thresh_str, advanced_thresh_str, format_choice, output_type]):
             return jsonify({"error": "Missing form data. Please fill out all fields."}), 400
 
         try:
             slow_thresh = float(slow_thresh_str)
-            fast_thresh = float(fast_thresh_str)
+            advanced_thresh = float(advanced_thresh_str)
         except ValueError:
              return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
@@ -84,6 +84,14 @@ def generate_report():
             cgpa_filename = secure_filename(f"CGPA_{cgpa_file.filename}")
             cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
             cgpa_file.save(cgpa_path)
+
+        # Handle Grade File
+        grade_path = None
+        grade_file = request.files.get('gradeFile')
+        if grade_file and grade_file.filename != '':
+            grade_filename = secure_filename(f"Grade_{grade_file.filename}")
+            grade_path = os.path.join(app.config['UPLOAD_FOLDER'], grade_filename)
+            grade_file.save(grade_path)
 
         # Handle Visual Signature
         img_path = None
@@ -118,10 +126,11 @@ def generate_report():
         controller = ReportController(
             excel_path=excel_path,
             cgpa_path=cgpa_path,
+            grade_path=grade_path,
             format_choice=format_choice,
             learner_type=learner_type,
             slow_thresh=slow_thresh,
-            fast_thresh=fast_thresh,
+            advanced_thresh=advanced_thresh,
             output_type=output_type,
             semester=semester,
             sign_info=sign_info,
