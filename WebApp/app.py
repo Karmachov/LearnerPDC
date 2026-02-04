@@ -77,7 +77,7 @@ def generate_report():
         excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         excel_file.save(excel_path)
 
-        # Handle CGPA file
+        # Handle CGPA file (Optional)
         cgpa_path = None
         cgpa_file = request.files.get('cgpaFile')
         if cgpa_file and cgpa_file.filename != '':
@@ -85,7 +85,7 @@ def generate_report():
             cgpa_path = os.path.join(app.config['UPLOAD_FOLDER'], cgpa_filename)
             cgpa_file.save(cgpa_path)
 
-        # Handle Grade File
+        # Handle Grade File (Optional)
         grade_path = None
         grade_file = request.files.get('gradeFile')
         if grade_file and grade_file.filename != '':
@@ -145,8 +145,6 @@ def generate_report():
 
         # Handle ZIP for multiple files
         if isinstance(output_path, list):
-            # Construct the zip filename
-            # Format: SubjectCode_SubjectName_Semester_LearnerType_ddmmyyyy_HHMMSS.zip
             clean_subject = re.sub(r'[^\w\-]', '_', controller.subject).strip('_')
             timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
             zip_filename = f"{clean_subject}_{semester}_{learner_type.title()}_{timestamp}.zip"
@@ -156,7 +154,6 @@ def generate_report():
                     if os.path.exists(fpath):
                         zf.write(fpath, arcname=os.path.basename(fpath))
             
-            # Send file then cleanup
             response = send_file(os.path.abspath(zip_path), as_attachment=True)
             cleanup_uploads(app.config['UPLOAD_FOLDER'], exclude=[zip_path])
             return response

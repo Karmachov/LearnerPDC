@@ -153,7 +153,8 @@ class StudentDataProcessor:
 
     def process_data(self, all_student_data, subject_name, semester, common_comment, cgpa_map=None, grade_map=None):
         cgpa_map = cgpa_map or {}
-        grade_map = grade_map or {}
+        grade_map = grade_map or {} 
+        
         for student in all_student_data:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip()
@@ -161,15 +162,21 @@ class StudentDataProcessor:
             roll_no = str(student.get('Register Number of the Student', '')).strip()
             student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '') 
             student['Actions taken to improve performance'] = common_comment
-            
-            # Progress Logic
-            grade = str(grade_map.get(roll_no, '')).strip().upper()
-            if grade == 'F':
-                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
-            elif grade and grade != 'NAN':
-                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
+        
+            # Grade processing is now safe if grade_map is empty
+            grade = grade_map.get(roll_no)
+        
+            if grade is not None:
+                grade_str = str(grade).strip().upper()
+                if grade_str == 'F':
+                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
+                elif grade_str and grade_str != 'NAN':
+                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
+                else:
+                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
             else:
-                student['Outcome (Based on clearance in end-semester or makeup exam)'] = '' # Or keep existing logic if any
+                # If roll number isn't in grade_map or grade_map is empty, result is blank
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
 
         return all_student_data
 
