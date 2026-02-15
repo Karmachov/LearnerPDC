@@ -61,6 +61,16 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         traceback.print_exc()
         return False
 
+# --- HELPER FUNCTIONS ---
+def normalize_registration_number(reg_num):
+    """Normalize registration number for consistent lookup across files."""
+    if pd.isna(reg_num) or reg_num is None:
+        return ''
+    # Convert to string, strip whitespace, remove .0 suffix, convert to uppercase, remove all spaces
+    normalized = str(reg_num).strip()
+    normalized = normalized.replace('.0', '').replace(' ', '').upper()
+    return normalized
+
 # --- DATA READER ---
 class DataReader:
     COLUMN_MAPPING = {
@@ -97,51 +107,173 @@ class DataReader:
             df.rename(columns=self.COLUMN_MAPPING, inplace=True)
             reg_col = 'Register Number of the Student'
             if reg_col in df.columns:
-                df[reg_col] = df[reg_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                df[reg_col] = df[reg_col].apply(normalize_registration_number)
             return df.to_dict('records'), subject_name
         except Exception: traceback.print_exc(); raise
 
     def read_cgpa_map(self, file_path):
-        if not file_path or not os.path.exists(file_path): return {}
+        print(f"\n[CGPA DEBUG] === read_cgpa_map called ===")
+        print(f"[CGPA DEBUG] File path: '{file_path}'")
+        print(f"[CGPA DEBUG] File exists: {os.path.exists(file_path) if file_path else 'N/A'}")
+        
+        if not file_path or not os.path.exists(file_path):
+            print(f"[CGPA DEBUG] No file path or file doesn't exist, returning empty dict")
+            return {}
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             if file_path.lower().endswith('.csv'): df = pd.read_csv(file_path)
             else: df = pd.read_excel(file_path, engine=engine)
+            
+            print(f"[CGPA DEBUG] Successfully read file, shape: {df.shape}")
+            
+            # Check if this is an Excel file with multiple sheets
+            if not file_path.lower().endswith('.csv'):
+                try:
+                    xl_file = pd.ExcelFile(file_path)
+                    print(f"[CGPA DEBUG] Excel file has {len(xl_file.sheet_names)} sheet(s): {xl_file.sheet_names}")
+                    
+                    # If there are multiple sheets, find the right one
+                    if len(xl_file.sheet_names) > 1:
+                        best_sheet = None
+                        max_rows = 0
+                        exact_match_sheet = None
+                        
+                        for sheet_name in xl_file.sheet_names:
+                            test_df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine, nrows=5)
+                            full_df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine)
+                            print(f"[CGPA DEBUG] Sheet '{sheet_name}' has {len(full_df)} rows, columns: {list(test_df.columns)}")
+                            
+                            # Check for exact match "Net Semester CGPA"
+                            if any('Net Semester CGPA' in str(col) for col in test_df.columns):
+                                exact_match_sheet = (sheet_name, full_df)
+                                print(f"[CGPA DEBUG] Sheet '{sheet_name}' has exact 'Net Semester CGPA' column!")
+                                break
+                            
+                            # Otherwise track sheet with most rows that has any GPA column
+                            if any('CGPA' in str(col).upper() or 'GPA' in str(col).upper() for col in test_df.columns):
+                                if len(full_df) > max_rows:
+                                    max_rows = len(full_df)
+                                    best_sheet = (sheet_name, full_df)
+                                    print(f"[CGPA DEBUG] Sheet '{sheet_name}' has CGPA data with {len(full_df)} rows")
+                        
+                        # Use exact match if found, otherwise use largest
+                        if exact_match_sheet:
+                            print(f"[CGPA DEBUG] Using sheet '{exact_match_sheet[0]}' (exact column match)")
+                            df = exact_match_sheet[1]
+                        elif best_sheet:
+                            print(f"[CGPA DEBUG] Using sheet '{best_sheet[0]}' with {max_rows} rows (largest with CGPA data)")
+                            df = best_sheet[1]
+                except Exception as e:
+                    print(f"[CGPA DEBUG] Error checking sheets: {e}")
+            
+            print(f"[CGPA DEBUG] Final dataframe shape: {df.shape}")
+            print(f"[CGPA DEBUG] Raw columns (first 5): {list(df.columns[:5])}")
+            print(f"[CGPA DEBUG] Column details:")
+            for i, col in enumerate(df.columns[:5]):
+                print(f"  [{i}] '{col}' (repr: {repr(col)})")
             
             def find_cols(dataframe):
                 dataframe.columns = dataframe.columns.astype(str).str.strip()
-                r = next((c for c in dataframe.columns if "Enrollment No." in c or "Roll Number" in c), None)
+                r = next((c for c in dataframe.columns if "Enrollment" in c or "Roll" in c or "Registration" in c), None)
+                # Try multiple patterns for CGPA column
                 v = next((c for c in dataframe.columns if "Net Semester CGPA" in c), None)
+                if not v:
+                    v = next((c for c in dataframe.columns if "CGPA" in c.upper()), None)
+                if not v:
+                    v = next((c for c in dataframe.columns if "GPA" in c.upper()), None)
                 return r, v
 
             roll_col, cgpa_col = find_cols(df)
-            if not roll_col: # Fallback
-                df = pd.read_excel(file_path, engine=engine, header=1)
-                roll_col, cgpa_col = find_cols(df)
+            if not roll_col: # Fallback to check header on second row
+                try:
+                    df_fallback = pd.read_excel(file_path, engine=engine, header=1)
+                    r_fb, v_fb = find_cols(df_fallback)
+                    if r_fb or v_fb: # If we found at least one, use this dataframe
+                        df = df_fallback
+                        roll_col, cgpa_col = r_fb, v_fb
+                except: pass
+
+            # USER REQUEST FIX: If roll_col still not found, assume first column is Registration Number
+            if not roll_col and len(df.columns) > 0:
+                roll_col = df.columns[0]
+            
+            # FALLBACK: If cgpa_col not found, assume second column is CGPA
+            if not cgpa_col and len(df.columns) > 1:
+                cgpa_col = df.columns[1]
+            
+            print(f"[CGPA DEBUG] Detected columns - Roll: '{roll_col}', CGPA: '{cgpa_col}'")
+            print(f"[CGPA DEBUG] All columns: {list(df.columns)}")
 
             if roll_col and cgpa_col:
-                df[roll_col] = df[roll_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                return pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
+                df[roll_col] = df[roll_col].apply(normalize_registration_number)
+                cgpa_dict = pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
+                print(f"[CGPA DEBUG] Created CGPA map with {len(cgpa_dict)} entries")
+                if len(cgpa_dict) > 0:
+                    # Show first few entries for debugging
+                    sample = dict(list(cgpa_dict.items())[:3])
+                    print(f"[CGPA DEBUG] Sample entries: {sample}")
+                return cgpa_dict
+            print(f"[CGPA DEBUG] Failed to detect columns properly, returning empty dict")
             return {}
-        except Exception: return {}
+        except Exception as e:
+            print(f"[CGPA DEBUG] EXCEPTION occurred: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
 
-    def read_grade_map(self, file_path):
-        if not file_path or not os.path.exists(file_path): return {}
+    def read_grade_map(self, file_path, course_code=None):
+        print(f"\n[GRADE DEBUG] === read_grade_map called ===")
+        print(f"[GRADE DEBUG] File path: '{file_path}'")
+        print(f"[GRADE DEBUG] Course code to filter: '{course_code}'")
+        
+        if not file_path or not os.path.exists(file_path):
+            print(f"[GRADE DEBUG] No file path or file doesn't exist, returning empty dict")
+            return {}
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             if file_path.lower().endswith('.csv'): df = pd.read_csv(file_path)
             else: df = pd.read_excel(file_path, engine=engine)
             
+            print(f"[GRADE DEBUG] Successfully read file, shape: {df.shape}")
             df.columns = df.columns.astype(str).str.strip()
+            print(f"[GRADE DEBUG] Columns: {list(df.columns)}")
+            
             # Find columns
-            enroll_col = next((c for c in df.columns if "Enrollment No" in c or "Roll" in c), None)
+            enroll_col = next((c for c in df.columns if "Enrollment" in c or "Roll" in c or "Registration" in c), None)
             grade_col = next((c for c in df.columns if "Grade" in c), None)
+            course_col = next((c for c in df.columns if "Course" in c or "Subject" in c or "Code" in c), None)
+            
+            print(f"[GRADE DEBUG] Detected - Enrollment: '{enroll_col}', Grade: '{grade_col}', Course: '{course_col}'")
 
             if enroll_col and grade_col:
-                df[enroll_col] = df[enroll_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+                # Filter by course code if provided and course column exists
+                if course_code and course_col:
+                    original_len = len(df)
+                    # Extract just the course code from the full subject string (e.g., "CSE 4467" from "Software Testing (CSE 4467)")
+                    course_code_only = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
+                    print(f"[GRADE DEBUG] Filtering by course code: '{course_code_only}'")
+                    
+                    # Filter rows where course column contains the course code
+                    df = df[df[course_col].astype(str).str.contains(course_code_only, case=False, na=False)]
+                    print(f"[GRADE DEBUG] Filtered from {original_len} to {len(df)} rows")
+                
+                if len(df) == 0:
+                    print(f"[GRADE DEBUG] No rows after filtering, returning empty dict")
+                    return {}
+                
+                df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
+                grade_dict = pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+                print(f"[GRADE DEBUG] Created grade map with {len(grade_dict)} entries")
+                if len(grade_dict) > 0:
+                    sample = dict(list(grade_dict.items())[:3])
+                    print(f"[GRADE DEBUG] Sample entries: {sample}")
+                return grade_dict
+            
+            print(f"[GRADE DEBUG] Could not find required columns, returning empty dict")
             return {}
-        except Exception: 
+        except Exception as e:
+            print(f"[GRADE DEBUG] EXCEPTION occurred: {type(e).__name__}: {e}")
+            import traceback
             traceback.print_exc()
             return {}
 
@@ -159,14 +291,25 @@ class StudentDataProcessor:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip()
             student['Semester'] = str(semester).strip().lower()
-            roll_no = str(student.get('Register Number of the Student', '')).strip()
-            student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '') 
+            roll_no = normalize_registration_number(student.get('Register Number of the Student', ''))
+            cgpa_value = cgpa_map.get(roll_no, '')
+            student['CGPA (up to previous semester)'] = cgpa_value
+            
+            # Debug: Print first student's CGPA lookup
+            if all_student_data.index(student) == 0:
+                print(f"[CGPA LOOKUP DEBUG] First student:")
+                print(f"  Original reg: '{student.get('Register Number of the Student', '')}'")
+                print(f"  Normalized: '{roll_no}'")
+                print(f"  CGPA found: '{cgpa_value}'")
+                print(f"  Total CGPA map entries: {len(cgpa_map)}") 
             student['Actions taken to improve performance'] = common_comment
             # Progress Logic
             grade = str(grade_map.get(roll_no, '')).strip().upper()
             improved_grades = {'A+', 'A', 'B', 'C', 'D', 'E', 'S'}
             
-            if grade in improved_grades:
+            if not grade or grade == 'NAN' or grade == 'NONE':
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
+            elif grade in improved_grades:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
             else:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
@@ -352,7 +495,7 @@ class ReportController:
         self.subject = subj 
         
         cg_map = self.reader.read_cgpa_map(self.cgpa_path)
-        grade_map = self.reader.read_grade_map(self.grade_path)
+        grade_map = self.reader.read_grade_map(self.grade_path, course_code=self.subject)
         processed = self.processor.process_data(all_data, self.subject, self.semester, self.common_comment, cg_map, grade_map)
         filtered = self.processor.filter_students(processed, self.learner_type, self.slow_threshold, self.advanced_threshold)
         
