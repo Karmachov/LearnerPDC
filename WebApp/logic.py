@@ -5,7 +5,6 @@
 import os
 import tempfile
 import platform
-import time
 import re
 import traceback
 import warnings
@@ -13,7 +12,6 @@ import subprocess
 from datetime import datetime
 
 import pandas as pd
-import openpyxl
 from endesive import pdf
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
@@ -58,15 +56,11 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
             f_out.write(pdf_data + signed_pdf_bytes)
         return True
     except Exception:
-        traceback.print_exc()
         return False
 
-# --- HELPER FUNCTIONS ---
 def normalize_registration_number(reg_num):
-    """Normalize registration number for consistent lookup across files."""
     if pd.isna(reg_num) or reg_num is None:
         return ''
-    # Convert to string, strip whitespace, remove .0 suffix, convert to uppercase, remove all spaces
     normalized = str(reg_num).strip()
     normalized = normalized.replace('.0', '').replace(' ', '').upper()
     return normalized
@@ -84,7 +78,6 @@ class DataReader:
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             df_header = pd.read_excel(file_path, engine=engine, nrows=5, header=None)
-
             for val in df_header.iloc[:, 0]:
                 if val and isinstance(val, str) and "Exam:" in val:
                     last_slash = val.rfind('/')
@@ -109,173 +102,54 @@ class DataReader:
             if reg_col in df.columns:
                 df[reg_col] = df[reg_col].apply(normalize_registration_number)
             return df.to_dict('records'), subject_name
-        except Exception: traceback.print_exc(); raise
+        except Exception: raise
 
     def read_cgpa_map(self, file_path):
-        print(f"\n[CGPA DEBUG] === read_cgpa_map called ===")
-        print(f"[CGPA DEBUG] File path: '{file_path}'")
-        print(f"[CGPA DEBUG] File exists: {os.path.exists(file_path) if file_path else 'N/A'}")
-        
         if not file_path or not os.path.exists(file_path):
-            print(f"[CGPA DEBUG] No file path or file doesn't exist, returning empty dict")
             return {}
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-            if file_path.lower().endswith('.csv'): df = pd.read_csv(file_path)
-            else: df = pd.read_excel(file_path, engine=engine)
-            
-            print(f"[CGPA DEBUG] Successfully read file, shape: {df.shape}")
-            
-            # Check if this is an Excel file with multiple sheets
-            if not file_path.lower().endswith('.csv'):
-                try:
-                    xl_file = pd.ExcelFile(file_path)
-                    print(f"[CGPA DEBUG] Excel file has {len(xl_file.sheet_names)} sheet(s): {xl_file.sheet_names}")
-                    
-                    # If there are multiple sheets, find the right one
-                    if len(xl_file.sheet_names) > 1:
-                        best_sheet = None
-                        max_rows = 0
-                        exact_match_sheet = None
-                        
-                        for sheet_name in xl_file.sheet_names:
-                            test_df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine, nrows=5)
-                            full_df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine)
-                            print(f"[CGPA DEBUG] Sheet '{sheet_name}' has {len(full_df)} rows, columns: {list(test_df.columns)}")
-                            
-                            # Check for exact match "Net Semester CGPA"
-                            if any('Net Semester CGPA' in str(col) for col in test_df.columns):
-                                exact_match_sheet = (sheet_name, full_df)
-                                print(f"[CGPA DEBUG] Sheet '{sheet_name}' has exact 'Net Semester CGPA' column!")
-                                break
-                            
-                            # Otherwise track sheet with most rows that has any GPA column
-                            if any('CGPA' in str(col).upper() or 'GPA' in str(col).upper() for col in test_df.columns):
-                                if len(full_df) > max_rows:
-                                    max_rows = len(full_df)
-                                    best_sheet = (sheet_name, full_df)
-                                    print(f"[CGPA DEBUG] Sheet '{sheet_name}' has CGPA data with {len(full_df)} rows")
-                        
-                        # Use exact match if found, otherwise use largest
-                        if exact_match_sheet:
-                            print(f"[CGPA DEBUG] Using sheet '{exact_match_sheet[0]}' (exact column match)")
-                            df = exact_match_sheet[1]
-                        elif best_sheet:
-                            print(f"[CGPA DEBUG] Using sheet '{best_sheet[0]}' with {max_rows} rows (largest with CGPA data)")
-                            df = best_sheet[1]
-                except Exception as e:
-                    print(f"[CGPA DEBUG] Error checking sheets: {e}")
-            
-            print(f"[CGPA DEBUG] Final dataframe shape: {df.shape}")
-            print(f"[CGPA DEBUG] Raw columns (first 5): {list(df.columns[:5])}")
-            print(f"[CGPA DEBUG] Column details:")
-            for i, col in enumerate(df.columns[:5]):
-                print(f"  [{i}] '{col}' (repr: {repr(col)})")
-            
-            def find_cols(dataframe):
-                dataframe.columns = dataframe.columns.astype(str).str.strip()
-                r = next((c for c in dataframe.columns if "Enrollment" in c or "Roll" in c or "Registration" in c), None)
-                # Try multiple patterns for CGPA column
-                v = next((c for c in dataframe.columns if "Net Semester CGPA" in c), None)
-                if not v:
-                    v = next((c for c in dataframe.columns if "CGPA" in c.upper()), None)
-                if not v:
-                    v = next((c for c in dataframe.columns if "GPA" in c.upper()), None)
-                return r, v
+            if file_path.lower().endswith('.csv'): 
+                df = pd.read_csv(file_path)
+            else:
+                xl_file = pd.ExcelFile(file_path)
+                best_sheet = xl_file.sheet_names[0]
+                if len(xl_file.sheet_names) > 1:
+                    max_rows = 0
+                    for sheet in xl_file.sheet_names:
+                        temp_df = pd.read_excel(file_path, sheet_name=sheet, engine=engine)
+                        if len(temp_df) > max_rows:
+                            max_rows = len(temp_df)
+                            best_sheet = sheet
+                df = pd.read_excel(file_path, sheet_name=best_sheet, engine=engine)
 
-            roll_col, cgpa_col = find_cols(df)
-            if not roll_col: # Fallback to check header on second row
-                try:
-                    df_fallback = pd.read_excel(file_path, engine=engine, header=1)
-                    r_fb, v_fb = find_cols(df_fallback)
-                    if r_fb or v_fb: # If we found at least one, use this dataframe
-                        df = df_fallback
-                        roll_col, cgpa_col = r_fb, v_fb
-                except: pass
-
-            # USER REQUEST FIX: If roll_col still not found, assume first column is Registration Number
-            if not roll_col and len(df.columns) > 0:
-                roll_col = df.columns[0]
-            
-            # FALLBACK: If cgpa_col not found, assume second column is CGPA
-            if not cgpa_col and len(df.columns) > 1:
-                cgpa_col = df.columns[1]
-            
-            print(f"[CGPA DEBUG] Detected columns - Roll: '{roll_col}', CGPA: '{cgpa_col}'")
-            print(f"[CGPA DEBUG] All columns: {list(df.columns)}")
-
-            if roll_col and cgpa_col:
+            if len(df.columns) >= 2:
+                # Col 1 (Index 0) = Reg No, Col 2 (Index 1) = CGPA
+                roll_col, cgpa_col = df.columns[0], df.columns[1]
                 df[roll_col] = df[roll_col].apply(normalize_registration_number)
-                cgpa_dict = pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
-                print(f"[CGPA DEBUG] Created CGPA map with {len(cgpa_dict)} entries")
-                if len(cgpa_dict) > 0:
-                    # Show first few entries for debugging
-                    sample = dict(list(cgpa_dict.items())[:3])
-                    print(f"[CGPA DEBUG] Sample entries: {sample}")
-                return cgpa_dict
-            print(f"[CGPA DEBUG] Failed to detect columns properly, returning empty dict")
+                return pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
             return {}
-        except Exception as e:
-            print(f"[CGPA DEBUG] EXCEPTION occurred: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            return {}
+        except Exception: return {}
 
     def read_grade_map(self, file_path, course_code=None):
-        print(f"\n[GRADE DEBUG] === read_grade_map called ===")
-        print(f"[GRADE DEBUG] File path: '{file_path}'")
-        print(f"[GRADE DEBUG] Course code to filter: '{course_code}'")
-        
         if not file_path or not os.path.exists(file_path):
-            print(f"[GRADE DEBUG] No file path or file doesn't exist, returning empty dict")
             return {}
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-            if file_path.lower().endswith('.csv'): df = pd.read_csv(file_path)
-            else: df = pd.read_excel(file_path, engine=engine)
+            df = pd.read_csv(file_path) if file_path.lower().endswith('.csv') else pd.read_excel(file_path, engine=engine)
             
-            print(f"[GRADE DEBUG] Successfully read file, shape: {df.shape}")
-            df.columns = df.columns.astype(str).str.strip()
-            print(f"[GRADE DEBUG] Columns: {list(df.columns)}")
-            
-            # Find columns
-            enroll_col = next((c for c in df.columns if "Enrollment" in c or "Roll" in c or "Registration" in c), None)
-            grade_col = next((c for c in df.columns if "Grade" in c), None)
-            course_col = next((c for c in df.columns if "Course" in c or "Subject" in c or "Code" in c), None)
-            
-            print(f"[GRADE DEBUG] Detected - Enrollment: '{enroll_col}', Grade: '{grade_col}', Course: '{course_col}'")
-
-            if enroll_col and grade_col:
-                # Filter by course code if provided and course column exists
-                if course_code and course_col:
-                    original_len = len(df)
-                    # Extract just the course code from the full subject string (e.g., "CSE 4467" from "Software Testing (CSE 4467)")
-                    course_code_only = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
-                    print(f"[GRADE DEBUG] Filtering by course code: '{course_code_only}'")
-                    
-                    # Filter rows where course column contains the course code
-                    df = df[df[course_col].astype(str).str.contains(course_code_only, case=False, na=False)]
-                    print(f"[GRADE DEBUG] Filtered from {original_len} to {len(df)} rows")
+            # Index 0: Enrollment, Index 1: Course Code, Index 2: Grade
+            if len(df.columns) >= 3:
+                enroll_col, course_col, grade_col = df.columns[0], df.columns[1], df.columns[2]
                 
-                if len(df) == 0:
-                    print(f"[GRADE DEBUG] No rows after filtering, returning empty dict")
-                    return {}
+                if course_code:
+                    target = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
+                    df = df[df[course_col].astype(str).str.contains(target, case=False, na=False)]
                 
                 df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
-                grade_dict = pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
-                print(f"[GRADE DEBUG] Created grade map with {len(grade_dict)} entries")
-                if len(grade_dict) > 0:
-                    sample = dict(list(grade_dict.items())[:3])
-                    print(f"[GRADE DEBUG] Sample entries: {sample}")
-                return grade_dict
-            
-            print(f"[GRADE DEBUG] Could not find required columns, returning empty dict")
+                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
             return {}
-        except Exception as e:
-            print(f"[GRADE DEBUG] EXCEPTION occurred: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            return {}
+        except Exception: return {}
 
 # --- DATA PROCESSOR ---
 class StudentDataProcessor:
@@ -286,43 +160,30 @@ class StudentDataProcessor:
     def process_data(self, all_student_data, subject_name, semester, common_comment, cgpa_map=None, grade_map=None):
         cgpa_map = cgpa_map or {}
         grade_map = grade_map or {} 
-        
         for student in all_student_data:
             student['MidtermPercentage'] = self._calculate_midterm_percentage(student.get('Midterm Exam Marks (Out of 30)'))
             student['Subject Name'] = str(subject_name).strip()
             student['Semester'] = str(semester).strip().lower()
             roll_no = normalize_registration_number(student.get('Register Number of the Student', ''))
-            cgpa_value = cgpa_map.get(roll_no, '')
-            student['CGPA (up to previous semester)'] = cgpa_value
-            
-            # Debug: Print first student's CGPA lookup
-            if all_student_data.index(student) == 0:
-                print(f"[CGPA LOOKUP DEBUG] First student:")
-                print(f"  Original reg: '{student.get('Register Number of the Student', '')}'")
-                print(f"  Normalized: '{roll_no}'")
-                print(f"  CGPA found: '{cgpa_value}'")
-                print(f"  Total CGPA map entries: {len(cgpa_map)}") 
+            student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '')
             student['Actions taken to improve performance'] = common_comment
-            # Progress Logic
-            grade = str(grade_map.get(roll_no, '')).strip().upper()
-            improved_grades = {'A+', 'A', 'B', 'C', 'D', 'E', 'S'}
             
-            if not grade or grade == 'NAN' or grade == 'NONE':
+            grade = str(grade_map.get(roll_no, '')).strip().upper()
+            if not grade or grade in ['NAN', 'NONE']:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
-            elif grade in improved_grades:
+            elif grade in {'A+', 'A', 'B', 'C', 'D', 'E', 'S'}:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
             else:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
-
         return all_student_data
 
     def filter_students(self, students, learner_type, slow_thresh, advanced_thresh):
         if learner_type == 'slow':
-            final_filtered = [s for s in students if s['MidtermPercentage'] < slow_thresh]
+            filtered = [s for s in students if s['MidtermPercentage'] < slow_thresh]
         else:
-            final_filtered = [s for s in students if s['MidtermPercentage'] > advanced_thresh]
-        final_filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
-        return final_filtered
+            filtered = [s for s in students if s['MidtermPercentage'] > advanced_thresh]
+        filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
+        return filtered
 
 # --- FORMATTERS ---
 class BaseFormatter:
@@ -355,27 +216,42 @@ class BaseFormatter:
         p.add_run("Signature of the\nsubject teacher / class coordinator")
 
     def _add_document_header(self, cell):
-        p1 = cell.add_paragraph(); p1.add_run('Manipal Institute of Technology').bold = True; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p2 = cell.add_paragraph(); p2.add_run('MAHE Manipal').bold = True; p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p3 = cell.add_paragraph(); p3.add_run('Computer Science and Engineering Department').bold = True; p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for line in ['Manipal Institute of Technology', 'MAHE Manipal', 'Computer Science and Engineering Department']:
+            p = cell.add_paragraph(); p.add_run(line).bold = True; p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     def _create_format1_content(self, doc, student, slow_threshold, fast_threshold):
         doc.add_heading('Format 1. Assessment of the learning levels of the students:', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
         ct = doc.add_table(rows=5, cols=1); ct.style = 'Table Grid'; self._add_document_header(ct.cell(0, 0))
         st_table = ct.cell(1, 0).add_table(rows=4, cols=2)
-        self.set_cell_properties(st_table.cell(0, 0), 'Name of the Student:'); self.set_cell_properties(st_table.cell(0, 1), student.get('Student Name', ''), font_name=self.BODY_FONT)
-        self.set_cell_properties(st_table.cell(1, 0), 'Registration Number:'); self.set_cell_properties(st_table.cell(1, 1), student.get('Register Number of the Student', ''), font_name=self.BODY_FONT)
-        self.set_cell_properties(st_table.cell(2, 0), 'Course:'); self.set_cell_properties(st_table.cell(2, 1), str(student.get('Subject Name', '')).upper(), font_name=self.BODY_FONT)
-        self.set_cell_properties(st_table.cell(3, 0), 'Year /semester:'); self.set_cell_properties(st_table.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.BODY_FONT)
+        
+        mapping = [('Name of the Student:', 'Student Name'), ('Registration Number:', 'Register Number of the Student'), 
+                   ('Course:', 'Subject Name'), ('Year /semester:', 'Semester')]
+        for i, (label, key) in enumerate(mapping):
+            self.set_cell_properties(st_table.cell(i, 0), label)
+            val = student.get(key, '') if key != 'Semester' else self.get_year_semester_string(student.get(key, ''))
+            self.set_cell_properties(st_table.cell(i, 1), str(val).upper() if key == 'Subject Name' else val, font_name=self.BODY_FONT)
+
         pt = ct.cell(2, 0).add_table(rows=3, cols=4); pt.style = 'Table Grid'; pt.cell(0, 2).merge(pt.cell(0, 3))
-        self.set_cell_properties(pt.cell(0, 0), 'Sr. No.', bold=True, align='CENTER'); self.set_cell_properties(pt.cell(0, 1), 'Parameter', bold=True, align='CENTER'); self.set_cell_properties(pt.cell(0, 2), 'Weightage in Percentage', bold=True, align='CENTER')
-        self.set_cell_properties(pt.cell(1, 0), '1', align='CENTER'); self.set_cell_properties(pt.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:"); self.set_cell_properties(pt.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.BODY_FONT); self.set_cell_properties(pt.cell(1, 3), "> %", align='CENTER')
-        self.set_cell_properties(pt.cell(2, 0), '2', align='CENTER'); self.set_cell_properties(pt.cell(2, 1), 'Performance of students in preceding university examination'); self.set_cell_properties(pt.cell(2, 2), str(student.get('CGPA (up to previous semester)', '')), align='CENTER', font_name=self.BODY_FONT); self.set_cell_properties(pt.cell(2, 3), "> %", align='CENTER')
+        headers = [('Sr. No.', 0), ('Parameter', 1), ('Weightage in Percentage', 2)]
+        for text, col in headers: self.set_cell_properties(pt.cell(0, col), text, bold=True, align='CENTER')
+        
+        self.set_cell_properties(pt.cell(1, 0), '1', align='CENTER')
+        self.set_cell_properties(pt.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:")
+        self.set_cell_properties(pt.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.BODY_FONT)
+        self.set_cell_properties(pt.cell(1, 3), "> %", align='CENTER')
+        
+        self.set_cell_properties(pt.cell(2, 0), '2', align='CENTER')
+        self.set_cell_properties(pt.cell(2, 1), 'Performance of students in preceding university examination')
+        self.set_cell_properties(pt.cell(2, 2), str(student.get('CGPA (up to previous semester)', '')), align='CENTER', font_name=self.BODY_FONT)
+        self.set_cell_properties(pt.cell(2, 3), "> %", align='CENTER')
+
         ct.cell(3, 0).text = "Total Weightage"; fc = ct.cell(4, 0)
         p1 = fc.add_paragraph(); p1.add_run(f"1. Midterm score less than {slow_threshold}% considered as a ")
         r1 = p1.add_run("slow learner"); (self.learner_type == 'slow') and (setattr(r1.font, 'underline', True), setattr(r1.font.color, 'rgb', RGBColor(255, 0, 0)))
+        
         p2 = fc.add_paragraph(); p2.add_run(f"2. Midterm score more than {fast_threshold}% considered as an ")
         r2 = p2.add_run("advanced learner"); (self.learner_type == 'advanced') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
+        
         p2.add_run(" **"); pd_ = fc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(fc)
 
     def _create_format2_content(self, doc, student):
@@ -383,83 +259,71 @@ class BaseFormatter:
         r1 = h.add_run('slow'); (self.learner_type == 'slow') and (setattr(r1.font, 'underline', True), setattr(r1.font.color, 'rgb', RGBColor(255, 0, 0)))
         h.add_run(' and '); r2 = h.add_run('advanced'); (self.learner_type == 'advanced') and (setattr(r2.font, 'underline', True), setattr(r2.font.color, 'rgb', RGBColor(255, 0, 0)))
         h.add_run(' learners')
+        
         ht = doc.add_table(rows=1, cols=1); self._add_document_header(ht.cell(0,0))
         ct = doc.add_table(rows=8, cols=2); ct.style = 'Table Grid'
-        self.set_cell_properties(ct.cell(0, 0), '1. Registration Number'); self.set_cell_properties(ct.cell(0, 1), student.get('Register Number of the Student', ''), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(1, 0), '2. Name of the student'); self.set_cell_properties(ct.cell(1, 1), student.get('Student Name', ''), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(2, 0), '3. Course'); self.set_cell_properties(ct.cell(2, 1), str(student.get('Subject Name', '')).upper(), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(3, 0), '4. Year/Semester'); self.set_cell_properties(ct.cell(3, 1), self.get_year_semester_string(student.get('Semester', '')), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(4, 0), '5. Midterm Percentage'); self.set_cell_properties(ct.cell(4, 1), f"{student.get('MidtermPercentage', 0):.2f}%", font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(5, 0), '6. Activities/ Measure/special programs\ntaken to improve the performance'); self.set_cell_properties(ct.cell(5, 1), str(student.get('Actions taken to improve performance', '')).replace(';', '\n'), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(6, 0), '7. Progress'); self.set_cell_properties(ct.cell(6, 1), str(student.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.BODY_FONT)
-        self.set_cell_properties(ct.cell(7, 0), 'Comments/remarks'); self.set_cell_properties(ct.cell(7, 1), str(student.get('Remarks if any', '')), font_name=self.BODY_FONT)
+        fields = [('1. Registration Number', 'Register Number of the Student'), ('2. Name of the student', 'Student Name'), 
+                  ('3. Course', 'Subject Name'), ('4. Year/Semester', 'Semester'), ('5. Midterm Percentage', 'MidtermPercentage'),
+                  ('6. Activities/ Measure/special programs\ntaken to improve the performance', 'Actions taken to improve performance'),
+                  ('7. Progress', 'Outcome (Based on clearance in end-semester or makeup exam)'), ('Comments/remarks', 'Remarks if any')]
+        
+        for i, (label, key) in enumerate(fields):
+            self.set_cell_properties(ct.cell(i, 0), label)
+            val = student.get(key, '')
+            if key == 'Semester': val = self.get_year_semester_string(val)
+            elif key == 'MidtermPercentage': val = f"{val:.2f}%"
+            elif key == 'Subject Name': val = str(val).upper()
+            self.set_cell_properties(ct.cell(i, 1), str(val).replace(';', '\n'), font_name=self.BODY_FONT)
+            
         pd_ = doc.add_paragraph(); pd_.add_run(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(doc)
 
 class Format1DocxFormatter(BaseFormatter):
     def format(self, s, st, ft): 
-        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) or setattr(sec, 'bottom_margin', Inches(0.5)) or setattr(sec, 'left_margin', Inches(0.5)) or setattr(sec, 'right_margin', Inches(0.5)) for sec in doc.sections]
-        return self._generate_pages(doc, s, self._create_format1_content, st, ft)
-    def _generate_pages(self, doc, students, method, *args):
-        for i, s in enumerate(students): method(doc, s, *args); (i < len(students)-1) and doc.add_page_break()
+        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
+        for i, student in enumerate(s): self._create_format1_content(doc, student, st, ft); (i < len(s)-1) and doc.add_page_break()
         return doc
 
 class Format2DocxFormatter(BaseFormatter):
     def format(self, s, st, ft): 
-        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) or setattr(sec, 'bottom_margin', Inches(0.5)) or setattr(sec, 'left_margin', Inches(0.5)) or setattr(sec, 'right_margin', Inches(0.5)) for sec in doc.sections]
+        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
         for i, student in enumerate(s): self._create_format2_content(doc, student); (i < len(s)-1) and doc.add_page_break()
         return doc
 
 class Format3DocxFormatter(BaseFormatter):
     def format(self, students, st, ft):
-        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) or setattr(sec, 'bottom_margin', Inches(0.5)) or setattr(sec, 'left_margin', Inches(0.5)) or setattr(sec, 'right_margin', Inches(0.5)) for sec in doc.sections]
-        if not students:
-            # Generate header info even if empty
-            if hasattr(self, 'subject') and hasattr(self, 'semester'):
-                doc.add_paragraph(f"Course: {str(self.subject).upper()}", style='Heading 3')
-                doc.add_paragraph(f"Year /Semester: {self.get_year_semester_string(self.semester)}", style='Heading 3')
-            
-            sc = ['Sl. No', 'Reg Number', 'Name of the student', 'Midterm Percentage', 'Progress']
-            t = doc.add_table(rows=1, cols=len(sc)); t.style = 'Table Grid'
-            for j, col_name in enumerate(sc): self.set_cell_properties(t.cell(0, j), col_name, bold=True)
-
-            # Generate 8 empty rows
-            for i in range(8):
-                rc = t.add_row().cells
-                self.set_cell_properties(rc[0], str(i + 1), font_name=self.BODY_FONT) # Sl. No
-                self.set_cell_properties(rc[1], "", font_name=self.BODY_FONT)
-                # 4th row (index 3), "Name of the student" column (index 2) gets NIL
-                txt = "NIL" if i == 3 else ""
-                align = 'CENTER' if i == 3 else 'LEFT'
-                self.set_cell_properties(rc[2], txt, font_name=self.BODY_FONT, align=align)
-                self.set_cell_properties(rc[3], "", font_name=self.BODY_FONT)
-                self.set_cell_properties(rc[4], "", font_name=self.BODY_FONT)
-
-            pd_ = doc.add_paragraph(); pd_.add_run(f"\nDate: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(doc); return doc
+        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
+        cols = ['Sl. No', 'Reg Number', 'Name of the student', 'Midterm Percentage', 'Progress']
         
-        df = pd.DataFrame(students); grouped = df.groupby(['Subject Name', 'Semester'])
-        for i, ((subject, semester), group) in enumerate(grouped):
-            doc.add_paragraph(f"Course: {str(subject).upper()}", style='Heading 3')
-            doc.add_paragraph(f"Year /Semester: {self.get_year_semester_string(semester)}", style='Heading 3')
-            sc = ['Sl. No', 'Reg Number', 'Name of the student', 'Midterm Percentage', 'Progress']
-            t = doc.add_table(rows=1, cols=len(sc)); t.style = 'Table Grid'
-            for j, col_name in enumerate(sc): self.set_cell_properties(t.cell(0, j), col_name, bold=True)
-            for idx, row in group.reset_index(drop=True).iterrows():
-                rc = t.add_row().cells; self.set_cell_properties(rc[0], str(idx + 1), font_name=self.BODY_FONT)
-                self.set_cell_properties(rc[1], str(row.get('Register Number of the Student', '')), font_name=self.BODY_FONT)
-                self.set_cell_properties(rc[2], str(row.get('Student Name', '')), font_name=self.BODY_FONT)
-                self.set_cell_properties(rc[3], f"{row.get('MidtermPercentage', 0):.2f}", font_name=self.BODY_FONT)
-                self.set_cell_properties(rc[4], str(row.get('Outcome (Based on clearance in end-semester or makeup exam)', '')), font_name=self.BODY_FONT)
-            pd_ = doc.add_paragraph(); pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT; self.add_signature_line(doc)
-            (i < len(grouped) - 1) and doc.add_page_break()
-        return doc
+        if not students:
+            if hasattr(self, 'subject'): doc.add_paragraph(f"Course: {str(self.subject).upper()}", style='Heading 3')
+            t = doc.add_table(rows=1, cols=len(cols)); t.style = 'Table Grid'
+            for j, c in enumerate(cols): self.set_cell_properties(t.cell(0, j), c, bold=True)
+            for i in range(8):
+                rc = t.add_row().cells; self.set_cell_properties(rc[0], str(i+1), font_name=self.BODY_FONT)
+                if i == 3: self.set_cell_properties(rc[2], "NIL", font_name=self.BODY_FONT, align='CENTER')
+            self.add_signature_line(doc); return doc
+        
+        group = pd.DataFrame(students)
+        doc.add_paragraph(f"Course: {str(group['Subject Name'].iloc[0]).upper()}", style='Heading 3')
+        t = doc.add_table(rows=1, cols=len(cols)); t.style = 'Table Grid'
+        for j, c in enumerate(cols): self.set_cell_properties(t.cell(0, j), c, bold=True)
+        for idx, row in group.reset_index(drop=True).iterrows():
+            rc = t.add_row().cells; self.set_cell_properties(rc[0], str(idx+1))
+            self.set_cell_properties(rc[1], row['Register Number of the Student'])
+            self.set_cell_properties(rc[2], row['Student Name'])
+            self.set_cell_properties(rc[3], f"{row['MidtermPercentage']:.2f}")
+            self.set_cell_properties(rc[4], row['Outcome (Based on clearance in end-semester or makeup exam)'])
+        self.add_signature_line(doc); return doc
 
 class Format1And2DocxFormatter(BaseFormatter):
     def format(self, students, st, ft):
-        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) or setattr(sec, 'bottom_margin', Inches(0.5)) or setattr(sec, 'left_margin', Inches(0.5)) or setattr(sec, 'right_margin', Inches(0.5)) for sec in doc.sections]
-        for i, student in enumerate(students): self._create_format1_content(doc, student, st, ft); doc.add_page_break(); self._create_format2_content(doc, student); (i < len(students)-1) and doc.add_page_break()
+        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
+        for i, student in enumerate(students): 
+            self._create_format1_content(doc, student, st, ft); doc.add_page_break()
+            self._create_format2_content(doc, student); (i < len(students)-1) and doc.add_page_break()
         return doc
 
-# --- FACTORIES & WRITERS ---
+# --- WRITERS ---
 class DocxWriter:
     def write(self, doc, out, **kwargs): doc.save(out)
 class PdfWriter:
@@ -469,15 +333,9 @@ class PdfWriter:
             doc.save(temp_docx)
             subprocess.run([get_libreoffice_command(), '--headless', '--convert-to', 'pdf', '--outdir', td, temp_docx], check=True, stdout=subprocess.DEVNULL)
             if os.path.exists(os.path.join(td, "temp.pdf")):
-                if os.path.exists(out): os.remove(out)
                 import shutil; shutil.move(os.path.join(td, "temp.pdf"), out)
                 if sign_info and sign_info.get('should_sign') and format_choice in ['1','2','4','5']:
                     sign_pdf(out, sign_info['key_path'], sign_info['cert_path'], sign_info['image_path'], sign_info['password'])
-
-def get_writer(ot): return DocxWriter() if ot == 'word' else PdfWriter()
-def get_formatter(fc): 
-    fms = {'1': Format1DocxFormatter(), '2': Format2DocxFormatter(), '3': Format3DocxFormatter(), '4': Format1And2DocxFormatter()}
-    return fms.get(fc)
 
 # --- CONTROLLER ---
 class ReportController:
@@ -485,56 +343,43 @@ class ReportController:
         self.excel_path = excel_path; self.cgpa_path = cgpa_path; self.grade_path = grade_path; self.format_choice = format_choice; self.learner_type = learner_type
         self.slow_threshold = slow_thresh; self.advanced_threshold = advanced_thresh; self.output_type = output_type; self.semester = semester.lower().strip()
         self.sign_info = sign_info; self.common_comment = common_comment; self.faculty_name = faculty_name
-        self.reader = DataReader(); self.processor = StudentDataProcessor(); self.writer = get_writer(output_type)
+        self.reader = DataReader(); self.processor = StudentDataProcessor()
+        self.writer = DocxWriter() if output_type == 'word' else PdfWriter()
 
     def run(self):
-        all_data, subj = self.reader.read_data(self.excel_path)
+        all_data, self.subject = self.reader.read_data(self.excel_path)
         if not all_data: return None
-        
-        # FIX: Assign to self so app.py can access it
-        self.subject = subj 
-        
         cg_map = self.reader.read_cgpa_map(self.cgpa_path)
         grade_map = self.reader.read_grade_map(self.grade_path, course_code=self.subject)
         processed = self.processor.process_data(all_data, self.subject, self.semester, self.common_comment, cg_map, grade_map)
         filtered = self.processor.filter_students(processed, self.learner_type, self.slow_threshold, self.advanced_threshold)
         
-        act_f = self.format_choice; is_e = False
-        if not filtered: act_f = '3'; is_e = True
-        
+        act_f = '3' if not filtered else self.format_choice
         ds = datetime.now().strftime('%d_%m_%y'); sn = self.semester.upper()
-        # Use self.subject here too
         sub_dir = re.sub(r'[\\/*?:"<>|]', "", self.subject.replace(' ', '_'))
         od = os.path.join("Learner_Monitor_Reports", f"{self.learner_type.title()}_Learners", f"Semester_{sn}", sub_dir)
         os.makedirs(od, exist_ok=True)
 
-        if act_f == '5' and not is_e: return self._generate_all_formats(filtered, od, ds, sn, sub_dir)
+        if act_f == '5' and filtered: return self._generate_all_formats(filtered, od, ds, sn, sub_dir)
         
-        fmt = get_formatter(act_f)
-        fmt.signature_image_path = self.sign_info.get('image_path')
-        fmt.faculty_name = self.faculty_name
-        fmt.signature_image_path = self.sign_info.get('image_path')
-        fmt.faculty_name = self.faculty_name
-        fmt.learner_type = self.learner_type
-        fmt.subject = self.subject
-        fmt.semester = self.semester
+        fmt = {'1': Format1DocxFormatter(), '2': Format2DocxFormatter(), '3': Format3DocxFormatter(), '4': Format1And2DocxFormatter()}.get(act_f)
+        for attr in ['signature_image_path', 'faculty_name', 'learner_type', 'subject', 'semester']:
+            val = getattr(self, attr) if hasattr(self, attr) else self.sign_info.get('image_path') if attr == 'signature_image_path' else None
+            setattr(fmt, attr, val)
         
-        obj = fmt.format(filtered, self.slow_threshold, self.advanced_threshold)
         ext = 'docx' if self.output_type == 'word' else 'pdf'
-        lbl = {'1':'Format1', '2':'Format2', '3':'Summary', '4':'Combined'}.get(act_f, "Report") if not is_e else "Empty_Summary"
+        lbl = {'1':'Format1', '2':'Format2', '3':'Summary', '4':'Combined'}.get(act_f, "Report") if filtered else "Empty_Summary"
         out_p = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_{lbl}_{ds}.{ext}')
-        self.writer.write(obj, out_p, sign_info=self.sign_info, format_choice=act_f)
+        self.writer.write(fmt.format(filtered, self.slow_threshold, self.advanced_threshold), out_p, sign_info=self.sign_info, format_choice=act_f)
         return out_p
 
     def _generate_all_formats(self, students, od, ds, sn, sub_dir):
         ext = 'docx' if self.output_type == 'word' else 'pdf'
-        # Combined
-        f12 = Format1And2DocxFormatter(); f12.signature_image_path = self.sign_info.get('image_path'); f12.faculty_name = self.faculty_name; f12.learner_type = self.learner_type
-        p1 = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_Combined_{ds}.{ext}')
-        self.writer.write(f12.format(students, self.slow_threshold, self.advanced_threshold), p1, sign_info=self.sign_info, format_choice='4')
-        # Summary
-        f3 = Format3DocxFormatter(); f3.signature_image_path = self.sign_info.get('image_path'); f3.faculty_name = self.faculty_name
-        f3.subject = self.subject; f3.semester = self.semester
-        p2 = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_Summary_{ds}.{ext}')
-        self.writer.write(f3.format(students, self.slow_threshold, self.advanced_threshold), p2, sign_info=self.sign_info, format_choice='3')
-        return [p1, p2]
+        res = []
+        for f_class, lbl, fc in [(Format1And2DocxFormatter, 'Combined', '4'), (Format3DocxFormatter, 'Summary', '3')]:
+            fmt = f_class()
+            fmt.signature_image_path, fmt.faculty_name, fmt.learner_type, fmt.subject, fmt.semester = self.sign_info.get('image_path'), self.faculty_name, self.learner_type, self.subject, self.semester
+            p = os.path.join(od, f'{sub_dir}_{sn}_{self.learner_type.title()}Learner_{lbl}_{ds}.{ext}')
+            self.writer.write(fmt.format(students, self.slow_threshold, self.advanced_threshold), p, sign_info=self.sign_info, format_choice=fc)
+            res.append(p)
+        return res

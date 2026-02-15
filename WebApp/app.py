@@ -58,17 +58,22 @@ def generate_report():
         learner_type = request.form.get('learnerType')
         comment = request.form.get('comment')
         faculty_name = request.form.get('facultyName')
-        slow_thresh_str = request.form.get('slowThreshold')
-        advanced_thresh_str = request.form.get('advancedThreshold')
         format_choice = request.form.get('formatChoice')
         output_type = request.form.get('outputType')
 
-        if not all([semester, learner_type, comment, slow_thresh_str, advanced_thresh_str, format_choice, output_type]):
+        # Thresholds are now conditional based on UI selection
+        slow_thresh_str = request.form.get('slowThreshold')
+        advanced_thresh_str = request.form.get('advancedThreshold')
+
+        # Updated validation: We only check for the core fields. 
+        # Thresholds are validated separately to handle the hidden UI state.
+        if not all([semester, learner_type, comment, format_choice, output_type]):
             return jsonify({"error": "Missing form data. Please fill out all fields."}), 400
 
         try:
-            slow_thresh = float(slow_thresh_str)
-            advanced_thresh = float(advanced_thresh_str)
+            # Provide defaults if the UI didn't send a value for the hidden field
+            slow_thresh = float(slow_thresh_str) if slow_thresh_str else 40.0
+            advanced_thresh = float(advanced_thresh_str) if advanced_thresh_str else 90.0
         except ValueError:
              return jsonify({"error": "Thresholds must be valid numbers."}), 400
 
@@ -169,4 +174,5 @@ def generate_report():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
+    # Using port 5001 as per your original configuration
     app.run(host='0.0.0.0', debug=True, port=5001)
