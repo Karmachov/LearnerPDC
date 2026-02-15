@@ -162,21 +162,14 @@ class StudentDataProcessor:
             roll_no = str(student.get('Register Number of the Student', '')).strip()
             student['CGPA (up to previous semester)'] = cgpa_map.get(roll_no, '') 
             student['Actions taken to improve performance'] = common_comment
-        
-            # Grade processing is now safe if grade_map is empty
-            grade = grade_map.get(roll_no)
-        
-            if grade is not None:
-                grade_str = str(grade).strip().upper()
-                if grade_str == 'F':
-                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
-                elif grade_str and grade_str != 'NAN':
-                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
-                else:
-                    student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
+            # Progress Logic
+            grade = str(grade_map.get(roll_no, '')).strip().upper()
+            improved_grades = {'A+', 'A', 'B', 'C', 'D', 'E', 'S'}
+            
+            if grade in improved_grades:
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Improved'
             else:
-                # If roll number isn't in grade_map or grade_map is empty, result is blank
-                student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
+                student['Outcome (Based on clearance in end-semester or makeup exam)'] = 'Not Improved'
 
         return all_student_data
 
