@@ -1,0 +1,109 @@
+name: learner-pdc
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quick start (from the farm/ directory):
+#
+#   cp .env.example .env          # fill in MASTER_KEY and JWT_SECRET
+#   docker compose up --build -d  # build all images and start in background
+#   docker compose logs -f        # tail logs
+#
+# Scale workers:  docker compose up --scale worker=3 -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ─── MongoDB ──────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: learner_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      # Bind-mount: data is visible on the host at ./mongo_data/
+      # This directory is git-ignored; Docker creates it automatically.
+      - ./mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: learner_pdc
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: learner_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── FastAPI Backend ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: learner_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      SHARED_DIR: /data/shared
+    volumes:
+      # Bind-mount: generated reports are visible on the host at ./shared_data/
+      - ./shared_data:/data/shared
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Celery Worker ────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: learner_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      SHARED_DIR: /data/shared
+    volumes:
+      # Must share the same host directory as the backend
+      - ./shared_data:/data/shared
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          # LibreOffice is memory-hungry; raise if running out during PDF conversion
+          memory: 2g
+
+  # ─── React Frontend (Nginx) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: learner_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

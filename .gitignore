@@ -1,25 +1,57 @@
-# Python virtual environment
+# ==============================================================
+# LearnerPDC — .gitignore
+# ==============================================================
+
+# ── Python ─────────────────────────────────────────────────────
 .venv/
-
-# macOS system files
-.DS_Store
-
-# Data and output files
-*.xlsx
-*.docx
-*.pem
-uploads/signature.png
-uploads/signature_clean.png
-WebApp/__pycache__/logic.cpython-313.pyc
-
-# Ignore uploaded student data and keys
-uploads/*
-!uploads/.gitkeep
-
-# Ignore generated reports
-Learner_Monitor_Reports/
-
-# Ignore environment variables and python cache
-.env
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ── macOS ──────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Environment variables — NEVER commit secrets ───────────────
+.env
+.env.*
+!.env.example          # keep the template committed
+
+# ── Cryptographic assets ───────────────────────────────────────
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+
+# ── FARM stack — persistent data volumes (host-mounted dirs) ───
+# These are created at runtime by Docker; never track their contents.
+farm/mongo_data/
+farm/shared_data/
+farm/reports/
+farm/uploads/
+
+# ── Legacy WebApp upload/report dirs ──────────────────────────
+uploads/*
+!uploads/.gitkeep
+Learner_Monitor_Reports/
+
+# ── Raw data files (student marks — personal data) ─────────────
+*.xlsx
+*.xls
+*.docx
+
+# ── Node / frontend build artifacts ────────────────────────────
+node_modules/
+dist/
+.next/
+.nuxt/
+
+# ── Docker build cache (if exported locally) ───────────────────
+*.tar
