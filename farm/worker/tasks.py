@@ -9,9 +9,30 @@ No secret material ever touches the filesystem.
 """
 
 import os
+import sys
 import shutil
 import traceback
 from pathlib import Path
+
+# ── Guarantee /app is on sys.path before any import ─────────────────────────
+# WORKDIR in the Dockerfile is /app; all worker modules (database.py, logic.py)
+# live there. We insert it explicitly because:
+#   - Celery prefork children may run with a different cwd than the parent
+#   - 'python -c' and subprocesses do not inherit the parent's cwd reliably
+#   - Path(__file__).parent works at module level but may not resolve correctly
+#     inside forked child processes on some container runtimes
+# Using the hardcoded value is safe — it is the canonical WORKDIR and never changes.
+_WORKER_DIR = "/app"
+if _WORKER_DIR not in sys.path:
+    sys.path.insert(0, _WORKER_DIR)
+
+# ── Module-level imports (resolved once in main process, inherited by forks) ─
+# Importing here rather than inside the task function body ensures:
+#   1. Import errors surface immediately at worker startup (not mid-task)
+#   2. Forked child processes inherit the already-resolved module objects
+#   3. No risk of cwd-relative lookup failing in a child's changed working dir
+from database import get_sync_faculty_collection, decrypt_bytes, decrypt_str  # noqa: E402
+from logic import ReportController  # noqa: E402
 
 from celery import Celery, states
 from celery.utils.log import get_task_logger
@@ -51,7 +72,6 @@ def _get_faculty_secrets(faculty_id: str) -> dict:
     Returns a dict with plaintext bytes for key, cert, image, and password.
     """
     from bson import ObjectId
-    from database import get_sync_faculty_collection, decrypt_bytes, decrypt_str
 
     col = get_sync_faculty_collection()
     doc = col.find_one({"_id": ObjectId(faculty_id)})
@@ -120,8 +140,6 @@ def generate_report_task(self, payload: dict):
             state=states.STARTED,
             meta={"message": "Generating report document…", "progress": 25},
         )
-
-        from logic import ReportController
 
         output_dir = payload["output_dir"]
         Path(output_dir).mkdir(parents=True, exist_ok=True)

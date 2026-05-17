@@ -5,10 +5,44 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
+
 import {
   ShieldCheck, Key, ImageIcon, CheckCircle, XCircle,
   Upload, Lock, AlertTriangle, RefreshCw,
 } from 'lucide-react';
+
+/**
+ * parseUploadError — converts any Axios error into a safe plain string.
+ * Handles:
+ *  • FastAPI 400/422 where detail is a string or array of validation objects
+ *  • 413 Payload Too Large (thrown by Nginx before FastAPI sees the request)
+ *  • Network errors (no response object)
+ */
+function parseUploadError(err) {
+  const status = err?.response?.status;
+  const detail = err?.response?.data?.detail;
+
+  if (status === 413) {
+    return 'File is too large. The server rejected it (413 Payload Too Large). Try a smaller file.';
+  }
+
+  if (!detail) {
+    return err?.message || 'Upload failed. Check your network connection and try again.';
+  }
+
+  if (typeof detail === 'string') return detail;
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map(d => {
+        const field = Array.isArray(d.loc) ? d.loc.filter(p => p !== 'body').join(' → ') : '';
+        return field ? `${field}: ${d.msg}` : d.msg;
+      })
+      .join('  •  ');
+  }
+
+  try { return JSON.stringify(detail); } catch { return 'Upload failed.'; }
+}
 
 function Card({ children, style }) {
   return (
@@ -125,7 +159,7 @@ function UploadSection({ title, icon, children, onSubmit, loading, success, erro
 }
 
 export default function Profile() {
-  const { faculty } = useAuth();
+  const { faculty, refreshFaculty } = useAuth();
 
   // Signature upload state
   const [sigFile, setSigFile] = useState(null);
@@ -150,8 +184,11 @@ export default function Profile() {
       fd.append('image', sigFile);
       await client.put('/profile/signature', fd);
       setSigSuccess('Signature image encrypted and saved to the secure vault.');
+      // Refresh the faculty profile so the status badge updates immediately
+      // (no page reload required).
+      await refreshFaculty();
     } catch (err) {
-      setSigError(err.response?.data?.detail || 'Upload failed.');
+      setSigError(parseUploadError(err));
     } finally {
       setSigLoading(false);
     }
@@ -169,8 +206,10 @@ export default function Profile() {
       await client.put('/profile/keys', fd);
       setKeySuccess('Private key, certificate, and passphrase encrypted and saved. They will be used automatically for signing.');
       setKeyPassword('');
+      // Refresh the faculty profile so the status badges update immediately.
+      await refreshFaculty();
     } catch (err) {
-      setKeyError(err.response?.data?.detail || 'Upload failed.');
+      setKeyError(parseUploadError(err));
     } finally {
       setKeyLoading(false);
     }

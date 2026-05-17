@@ -35,8 +35,24 @@ export function AuthProvider({ children }) {
     setFaculty(null);
   };
 
+  /**
+   * refreshFaculty — re-fetches /auth/me from the live database and updates
+   * the faculty state. Call this after any profile mutation (signature/key upload)
+   * so the status badges update immediately without requiring a page reload.
+   */
+  const refreshFaculty = async () => {
+    try {
+      const me = await client.get('/auth/me');
+      setFaculty(me.data);
+    } catch {
+      // Token may have expired — force logout
+      localStorage.removeItem('access_token');
+      setFaculty(null);
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ faculty, loading, login, logout }}>
+    <AuthContext.Provider value={{ faculty, loading, login, logout, refreshFaculty }}>
       {children}
     </AuthContext.Provider>
   );
