@@ -2,7 +2,9 @@
  * components/TaskStatusCard.jsx — animated progress indicator.
  */
 
+import { useState } from 'react';
 import { CheckCircle, XCircle, Loader2, Clock, Download } from 'lucide-react';
+import { downloadReport } from '../api/client';
 
 const STATUS_CONFIG = {
   PENDING: {
@@ -29,10 +31,49 @@ const STATUS_CONFIG = {
     color: '#ef4444',
     barColor: 'linear-gradient(90deg, #ef4444, #b91c1c)',
   },
+  REVOKED: {
+    icon: <XCircle size={22} color="#94a3b8" />,
+    label: 'Cancelled',
+    color: '#94a3b8',
+    barColor: 'linear-gradient(90deg, #64748b, #94a3b8)',
+  },
 };
 
-export default function TaskStatusCard({ taskId, status, message, progress, downloadToken, error, onReset }) {
+export default function TaskStatusCard({
+  taskId, status, message, progress, downloadToken, error, pollError, onReset,
+}) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.PENDING;
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+
+  const handleDownload = async () => {
+    const id = downloadToken || taskId;
+    if (!id) return;
+    setDownloadError('');
+    setDownloading(true);
+    try {
+      await downloadReport(id);
+    } catch (err) {
+      let detail = err.response?.data?.detail;
+      if (err.response?.data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await err.response.data.text());
+          detail = parsed.detail;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (typeof detail === 'string') {
+        setDownloadError(detail);
+      } else if (err.response?.status === 401) {
+        setDownloadError('Session expired. Please sign in again.');
+      } else {
+        setDownloadError('Download failed. Please try again.');
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <>
@@ -88,6 +129,20 @@ export default function TaskStatusCard({ taskId, status, message, progress, down
           {message || 'Waiting for status update…'}
         </p>
 
+        {pollError && status !== 'FAILURE' && status !== 'SUCCESS' && (
+          <div style={{
+            background: 'rgba(245,158,11,0.1)',
+            border: '1px solid rgba(245,158,11,0.35)',
+            borderRadius: '8px',
+            padding: '10px 14px',
+            fontSize: '13px',
+            color: '#fcd34d',
+            marginBottom: '16px',
+          }}>
+            {pollError}
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div style={{
@@ -104,13 +159,27 @@ export default function TaskStatusCard({ taskId, status, message, progress, down
           </div>
         )}
 
+        {downloadError && (
+          <div style={{
+            background: 'rgba(239,68,68,0.1)',
+            border: '1px solid rgba(239,68,68,0.3)',
+            borderRadius: '8px',
+            padding: '10px 14px',
+            fontSize: '13px',
+            color: '#fca5a5',
+            marginBottom: '16px',
+          }}>
+            {downloadError}
+          </div>
+        )}
+
         {/* Actions */}
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          {status === 'SUCCESS' && downloadToken && (
-            <a
-              href={`/api/download/${downloadToken}`}
-              target="_blank"
-              rel="noopener noreferrer"
+          {status === 'SUCCESS' && (downloadToken || taskId) && (
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -122,18 +191,19 @@ export default function TaskStatusCard({ taskId, status, message, progress, down
                 padding: '10px 20px',
                 fontWeight: '600',
                 fontSize: '14px',
-                cursor: 'pointer',
-                textDecoration: 'none',
-                transition: 'opacity 0.15s',
+                cursor: downloading ? 'wait' : 'pointer',
+                opacity: downloading ? 0.7 : 1,
               }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '1'}
             >
-              <Download size={15} />
-              Download Report
-            </a>
+              {downloading ? (
+                <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} />
+              ) : (
+                <Download size={15} />
+              )}
+              {downloading ? 'Downloading…' : 'Download Report'}
+            </button>
           )}
-          {(status === 'SUCCESS' || status === 'FAILURE') && (
+          {(status === 'SUCCESS' || status === 'FAILURE' || status === 'REVOKED') && (
             <button
               onClick={onReset}
               style={{

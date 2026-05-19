@@ -11,28 +11,20 @@ No secret material ever touches the filesystem.
 import os
 import sys
 import shutil
+import time
 import traceback
 from pathlib import Path
 
 # ── Guarantee /app is on sys.path before any import ─────────────────────────
-# WORKDIR in the Dockerfile is /app; all worker modules (database.py, logic.py)
-# live there. We insert it explicitly because:
-#   - Celery prefork children may run with a different cwd than the parent
-#   - 'python -c' and subprocesses do not inherit the parent's cwd reliably
-#   - Path(__file__).parent works at module level but may not resolve correctly
-#     inside forked child processes on some container runtimes
-# Using the hardcoded value is safe — it is the canonical WORKDIR and never changes.
 _WORKER_DIR = "/app"
 if _WORKER_DIR not in sys.path:
     sys.path.insert(0, _WORKER_DIR)
 
-# ── Module-level imports (resolved once in main process, inherited by forks) ─
-# Importing here rather than inside the task function body ensures:
-#   1. Import errors surface immediately at worker startup (not mid-task)
-#   2. Forked child processes inherit the already-resolved module objects
-#   3. No risk of cwd-relative lookup failing in a child's changed working dir
 from database import get_sync_faculty_collection, decrypt_bytes, decrypt_str  # noqa: E402
 from logic import ReportController  # noqa: E402
+from shared.audit import audit_log_sync  # noqa: E402
+from shared.pem_validation import normalize_passphrase  # noqa: E402
+from shared.task_errors import ReportTaskError, user_facing_task_error  # noqa: E402
 
 from celery import Celery, states
 from celery.utils.log import get_task_logger
@@ -82,9 +74,18 @@ def _get_faculty_secrets(faculty_id: str) -> dict:
         "key_bytes": decrypt_bytes(doc["private_key_enc"]) if doc.get("private_key_enc") else None,
         "cert_bytes": decrypt_bytes(doc["certificate_enc"]) if doc.get("certificate_enc") else None,
         "image_bytes": decrypt_bytes(doc["signature_image_enc"]) if doc.get("signature_image_enc") else None,
-        "password": decrypt_str(doc["key_password_enc"]) if doc.get("key_password_enc") else "",
+        "password": normalize_passphrase(
+            decrypt_str(doc["key_password_enc"]) if doc.get("key_password_enc") else ""
+        ),
     }
     return secrets
+
+
+def _excel_file_size(payload: dict) -> int | None:
+    try:
+        return Path(payload["excel_path"]).stat().st_size
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +96,8 @@ def _get_faculty_secrets(faculty_id: str) -> dict:
     bind=True,
     name="generate_report_task",
     max_retries=2,
-    soft_time_limit=300,  # 5 min soft limit → raises SoftTimeLimitExceeded
-    time_limit=360,        # 6 min hard kill
+    soft_time_limit=300,
+    time_limit=360,
 )
 def generate_report_task(self, payload: dict):
     """
@@ -107,9 +108,10 @@ def generate_report_task(self, payload: dict):
     """
     task_id: str = payload["task_id"]
     faculty_id: str = payload["faculty_id"]
+    started_at = time.monotonic()
+    file_size = _excel_file_size(payload)
 
     try:
-        # --- Stage 1: Fetch secrets ---
         self.update_state(
             state=states.STARTED,
             meta={"message": "Fetching credentials from vault…", "progress": 5},
@@ -128,14 +130,12 @@ def generate_report_task(self, payload: dict):
                 "password": secrets["password"],
             }
         else:
-            # Still try to fetch image for the visual signature line
             try:
                 secrets = _get_faculty_secrets(faculty_id)
                 sign_info["image_bytes"] = secrets.get("image_bytes")
             except Exception:
                 sign_info["image_bytes"] = None
 
-        # --- Stage 2: Generate report ---
         self.update_state(
             state=states.STARTED,
             meta={"message": "Generating report document…", "progress": 25},
@@ -170,7 +170,6 @@ def generate_report_task(self, payload: dict):
         if not output_path:
             raise RuntimeError("ReportController returned no output path. Check the Excel file and filters.")
 
-        # --- Stage 3: Cleanup upload temp files ---
         self.update_state(
             state=states.STARTED,
             meta={"message": "Finalising and cleaning up…", "progress": 90},
@@ -182,20 +181,40 @@ def generate_report_task(self, payload: dict):
         except Exception as e:
             logger.warning(f"[{task_id}] Could not clean upload dir: {e}")
 
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(f"[{task_id}] Report generation complete: {output_path}")
+
+        audit_log_sync(
+            "report.completed",
+            faculty_id=faculty_id,
+            task_id=task_id,
+            duration_ms=duration_ms,
+            file_size_bytes=file_size,
+            details={"output_type": payload.get("output_type")},
+        )
 
         return {
             "status": "SUCCESS",
-            "download_token": task_id,  # the API uses task_id as the download key
+            "download_token": task_id,
             "output_path": output_path if isinstance(output_path, str) else str(output_path),
         }
 
     except Exception as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        safe_message = user_facing_task_error(exc)
         logger.error(f"[{task_id}] Task failed: {exc}")
         traceback.print_exc()
-        # Do not retry for user-input errors (bad Excel, wrong filters, etc.)
-        self.update_state(
-            state=states.FAILURE,
-            meta={"exc_type": type(exc).__name__, "exc_message": str(exc)},
+
+        audit_log_sync(
+            "report.failed",
+            faculty_id=faculty_id,
+            task_id=task_id,
+            duration_ms=duration_ms,
+            file_size_bytes=file_size,
+            error_summary=safe_message,
+            details={"exc_type": type(exc).__name__},
         )
-        raise exc
+
+        # Raise only ReportTaskError so Celery's FAILURE metadata stays user-safe.
+        # Do not call update_state(FAILURE) — Celery overwrites it with the full traceback.
+        raise ReportTaskError(safe_message) from exc

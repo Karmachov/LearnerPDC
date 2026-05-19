@@ -204,7 +204,9 @@ export default function Profile() {
       fd.append('certificate', certFile);
       fd.append('key_password', keyPassword);
       await client.put('/profile/keys', fd);
-      setKeySuccess('Private key, certificate, and passphrase encrypted and saved. They will be used automatically for signing.');
+      setKeySuccess(
+        'Private key, certificate, and passphrase saved. Generate a PDF with "Enable digital signing" to verify.'
+      );
       setKeyPassword('');
       // Refresh the faculty profile so the status badges update immediately.
       await refreshFaculty();
@@ -327,7 +329,8 @@ export default function Profile() {
                 </button>
               </div>
               <p style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '4px 0 0' }}>
-                Stored Fernet-encrypted. Re-enter only if you change your key.
+                Required every time you click Save to Vault. Use the same passphrase that unlocks your
+                private key file (test with OpenSSL if unsure).
               </p>
             </div>
           </UploadSection>

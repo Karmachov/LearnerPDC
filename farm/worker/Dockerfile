@@ -37,12 +37,15 @@ RUN sed -i -e's/ main/ main contrib non-free/g' /etc/apt/sources.list.d/debian.s
 # --prefer-binary forces pip to use pre-compiled manylinux/musllinux wheels for
 # packages like cryptography, pandas, and PyMuPDF instead of source tarballs,
 # preventing C extension compilation and associated memory spikes.
-COPY requirements.txt .
+COPY worker/requirements.txt .
 RUN pip install --upgrade pip --no-cache-dir && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # ─── LAYER 5: Application code (changes most often — last layer) ─────────────
-COPY . .
+COPY shared /app/shared
+COPY worker /app
+
+ENV PYTHONPATH=/app
 
 RUN mkdir -p /data/shared/uploads /data/shared/reports
 

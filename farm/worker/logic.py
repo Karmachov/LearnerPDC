@@ -6,6 +6,7 @@
 #   3. add_image_to_all_pages_fitz() added back for post-sign image overlay
 # ==============================================================================
 
+# Version: 2.0.1 - Fixed digital signing with empty image bytes
 import os
 import re
 import io
@@ -56,6 +57,8 @@ def get_libreoffice_command() -> str:
 
 def add_image_to_all_pages_fitz(pdf_path: str, image_bytes: bytes, x=435, y=72, width=100, height=40):
     """Overlay signature image on every page except the first (which has the digital sig widget)."""
+    if not image_bytes:
+        return
     doc = fitz.open(pdf_path)
     for page_index in range(1, len(doc)):
         page = doc[page_index]
@@ -64,47 +67,87 @@ def add_image_to_all_pages_fitz(pdf_path: str, image_bytes: bytes, x=435, y=72, 
     doc.saveIncr()
 
 
-def sign_pdf(pdf_path: str, key_bytes: bytes, cert_bytes: bytes, image_bytes: bytes, password: str) -> bool:
+def sign_pdf(pdf_path: str, key_bytes: bytes, cert_bytes: bytes, image_bytes: bytes, password: str) -> None:
     """
     Digitally sign the PDF on the FIRST page.
     All secret material is passed as bytes — never written to disk.
+
+    Raises RuntimeError with a user-safe message on failure (propagates to Celery FAILURE).
     """
+    password = (password or "").strip()
+    print(f"DEBUG: sign_pdf called. image_bytes type: {type(image_bytes)}, length: {len(image_bytes) if image_bytes else 0}")
     try:
         date = datetime.now().strftime("D:%Y%m%d%H%M%S+05'30'")
         private_key = load_pem_private_key(
             key_bytes,
-            password=password.encode('utf-8') if password else None
+            password=password.encode("utf-8") if password else None,
         )
         certificate = load_pem_x509_certificate(cert_bytes)
 
         with open(pdf_path, 'rb') as f:
             pdf_data = f.read()
 
+        # Robust check: only include signature_img if it looks like a valid PNG/JPEG
+        is_valid_image = False
+        img_obj = None
+        if image_bytes and isinstance(image_bytes, bytes) and len(image_bytes) > 0:
+            try:
+                from PIL import Image
+                img_obj = Image.open(io.BytesIO(image_bytes))
+                img_obj.verify()  # Check if it's a valid image
+                # Re-open because verify() closes the file or makes it unusable for further processing
+                img_obj = Image.open(io.BytesIO(image_bytes))
+                is_valid_image = True
+            except Exception as e:
+                print(f"DEBUG: Image validation failed: {e}")
+                is_valid_image = False
+
         signdata = {
-            'sigflags': 3,
+            'sigflags': 1,  # Invisible signature to avoid visual clutter/spam
             'contact': 'faculty@manipal.edu',
             'location': 'Manipal, India',
             'reason': 'Verified Learner Report',
             'signingdate': date,
-            'signature_img': image_bytes,
-            'signaturebox': (435, 72, 540, 105),
             'page': 0,
         }
+        # We no longer add signature_img or signaturebox here because the 
+        # BaseFormatter already adds the signature image above the signature lines
+        # in the Word document, which is more accurate.
 
-        signed_bytes = endesive_pdf.cms.sign(
-            pdf_data, signdata, key=private_key, cert=certificate, othercerts=()
-        )
+        try:
+            signed_bytes = endesive_pdf.cms.sign(
+                pdf_data, signdata, key=private_key, cert=certificate, othercerts=()
+            )
+        except Exception as e:
+            # If signing fails, we propagate the error
+            raise
 
         with open(pdf_path, 'wb') as f:
             f.write(pdf_data + signed_bytes)
 
-        # Overlay signature image on all other pages
-        add_image_to_all_pages_fitz(pdf_path, image_bytes)
-        return True
+        # We no longer call add_image_to_all_pages_fitz here to avoid "signature spam"
+        # on every page. The signatures in the document body are sufficient.
 
-    except Exception:
+    except ValueError as exc:
         traceback.print_exc()
-        return False
+        msg = str(exc).lower()
+        if "password" in msg or "decrypt" in msg:
+            raise RuntimeError(
+                "Incorrect key passphrase. Open Profile Settings, re-upload your private key "
+                ".pem and certificate, and enter the passphrase that unlocks the key file."
+            ) from exc
+        raise RuntimeError(f"Digital signing failed: {exc}") from exc
+    except ModuleNotFoundError as exc:
+        traceback.print_exc()
+        raise RuntimeError(
+            f"Digital signing is misconfigured on the server (missing dependency: {exc.name}). "
+            "Contact the administrator or retry after the worker image is updated."
+        ) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise RuntimeError(
+            "Digital signing failed. Verify your key, certificate, and passphrase in Profile Settings."
+        ) from exc
 
 
 # ==============================================================================
@@ -277,7 +320,8 @@ class BaseFormatter:
             try:
                 run = p.add_run()
                 run.add_picture(io.BytesIO(self.signature_image_bytes), width=Inches(0.8))
-                run.add_break()
+                # Line break only — run.add_break() can export as an extra blank page in LibreOffice PDF.
+                run.add_run("\n")
             except Exception:
                 pass
         p.add_run("_" * 40 + "\n")
@@ -291,8 +335,13 @@ class BaseFormatter:
             p.add_run(line).bold = True
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    def _create_format1_content(self, doc, student, slow_threshold, fast_threshold):
-        doc.add_heading('Format 1. Assessment of the learning levels of the students:', level=2).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    def _create_format1_content(self, doc, student, slow_threshold, fast_threshold, page_break_before=False):
+        heading = doc.add_heading(
+            'Format 1. Assessment of the learning levels of the students:', level=2
+        )
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if page_break_before:
+            heading.paragraph_format.page_break_before = True
         ct = doc.add_table(rows=5, cols=1)
         ct.style = 'Table Grid'
         self._add_document_header(ct.cell(0, 0))
@@ -348,10 +397,12 @@ class BaseFormatter:
         pd_.add_run(f"Date: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT
         self.add_signature_line(fc)
 
-    def _create_format2_content(self, doc, student):
+    def _create_format2_content(self, doc, student, page_break_before=False):
         h = doc.add_paragraph()
         h.style = 'Heading 2'
         h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if page_break_before:
+            h.paragraph_format.page_break_before = True
         h.add_run('Format -2 Report of performance/ improvement for ')
         r1 = h.add_run('slow')
         if self.learner_type == 'slow':
@@ -395,8 +446,9 @@ class Format1DocxFormatter(BaseFormatter):
         doc = Document()
         for sec in doc.sections: sec.top_margin = Inches(0.5)
         for i, s in enumerate(students):
-            self._create_format1_content(doc, s, slow_threshold, fast_threshold)
-            if i < len(students) - 1: doc.add_page_break()
+            self._create_format1_content(
+                doc, s, slow_threshold, fast_threshold, page_break_before=(i > 0)
+            )
         return doc
 
 
@@ -405,8 +457,7 @@ class Format2DocxFormatter(BaseFormatter):
         doc = Document()
         for sec in doc.sections: sec.top_margin = Inches(0.5)
         for i, s in enumerate(students):
-            self._create_format2_content(doc, s)
-            if i < len(students) - 1: doc.add_page_break()
+            self._create_format2_content(doc, s, page_break_before=(i > 0))
         return doc
 
 
@@ -448,10 +499,12 @@ class Format1And2DocxFormatter(BaseFormatter):
         doc = Document()
         for sec in doc.sections: sec.top_margin = Inches(0.5)
         for i, s in enumerate(students):
-            self._create_format1_content(doc, s, slow_threshold, fast_threshold)
-            doc.add_page_break()
-            self._create_format2_content(doc, s)
-            if i < len(students) - 1: doc.add_page_break()
+            # Use paragraph page_break_before instead of doc.add_page_break() — the latter
+            # often produces a blank page in LibreOffice PDF when the prior section is full.
+            self._create_format1_content(
+                doc, s, slow_threshold, fast_threshold, page_break_before=(i > 0)
+            )
+            self._create_format2_content(doc, s, page_break_before=True)
         return doc
 
 
@@ -466,26 +519,48 @@ class DocxWriter:
 
 class PdfWriter:
     def write(self, doc, out_path: str, sign_info: dict = None, format_choice: str = None):
+        import shutil
+
         with tempfile.TemporaryDirectory() as td:
             temp_docx = os.path.join(td, "temp.docx")
             doc.save(temp_docx)
-            subprocess.run(
-                [get_libreoffice_command(), '--headless', '--convert-to', 'pdf', '--outdir', td, temp_docx],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            temp_pdf = os.path.join(td, "temp.pdf")
-            if os.path.exists(temp_pdf):
-                import shutil
-                shutil.move(temp_pdf, out_path)
+            try:
+                subprocess.run(
+                    [get_libreoffice_command(), '--headless', '--convert-to', 'pdf', '--outdir', td, temp_docx],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    "PDF conversion timed out. Try a smaller document or reduce the number of students."
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    "PDF conversion failed. Ensure LibreOffice is available in the worker container."
+                ) from exc
 
-                if sign_info and sign_info.get('should_sign') and format_choice in ['1', '2', '4', '5']:
-                    sign_pdf(
-                        out_path,
-                        key_bytes=sign_info['key_bytes'],
-                        cert_bytes=sign_info['cert_bytes'],
-                        image_bytes=sign_info.get('image_bytes', b''),
-                        password=sign_info.get('password', ''),
+            temp_pdf = os.path.join(td, "temp.pdf")
+            if not os.path.exists(temp_pdf):
+                raise RuntimeError(
+                    "PDF conversion failed: LibreOffice did not produce an output file."
+                )
+
+            shutil.move(temp_pdf, out_path)
+
+            if sign_info and sign_info.get('should_sign') and format_choice in ['1', '2', '4', '5']:
+                if not sign_info.get('key_bytes') or not sign_info.get('cert_bytes'):
+                    raise RuntimeError(
+                        "Digital signing is enabled but signing credentials are missing."
                     )
+                sign_pdf(
+                    out_path,
+                    key_bytes=sign_info['key_bytes'],
+                    cert_bytes=sign_info['cert_bytes'],
+                    image_bytes=sign_info.get('image_bytes', b''),
+                    password=sign_info.get('password', ''),
+                )
 
 
 # ==============================================================================

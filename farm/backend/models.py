@@ -105,6 +105,20 @@ class GenerateReportResponse(BaseModel):
     message: str = "Report generation queued successfully."
 
 
+class ReportHistoryItem(BaseModel):
+    task_id: str
+    status: str
+    semester: str
+    learner_type: str
+    format_choice: str
+    output_type: str
+    created_at: datetime
+
+
+class ReportHistoryResponse(BaseModel):
+    reports: list[ReportHistoryItem]
+
+
 # ===========================================================================
 # Profile updates (multipart handled separately in routes)
 # ===========================================================================

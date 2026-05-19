@@ -4,14 +4,15 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import client from '../api/client';
+import client, { downloadReport } from '../api/client';
 import TaskStatusCard from '../components/TaskStatusCard';
 import {
   FileSpreadsheet, Upload, ChevronDown, AlertTriangle, Zap,
-  FileText, Table2, BookOpen, Layers, Star,
+  FileText, Table2, BookOpen, Layers, Star, History, Download, RefreshCw,
 } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 2500;
+const MAX_POLL_ERRORS = 5;
 
 const SEMESTER_OPTIONS = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
 const FORMAT_OPTIONS = [
@@ -166,24 +167,82 @@ export default function Dashboard() {
   // Task state
   const [taskId, setTaskId] = useState(null);
   const [taskData, setTaskData] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const [pollError, setPollError] = useState('');
   const pollRef = useRef(null);
+  const pollFailCountRef = useRef(0);
 
   // Signing warning
   const signingMissing = enableSigning && (!faculty?.has_private_key || !faculty?.has_certificate);
 
+  const fetchHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const r = await client.get('/reports');
+      setHistory(r.data.reports);
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
   // Polling
   useEffect(() => {
     if (!taskId) return;
+    pollFailCountRef.current = 0;
+    setPollError('');
+
+    const pollStatusMessage = (err) => {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      if (status === 403) return typeof detail === 'string' ? detail : 'You do not have access to this task.';
+      if (status === 404) return typeof detail === 'string' ? detail : 'Task not found.';
+      if (!err.response) return 'Lost connection while checking report status.';
+      return 'Could not refresh report status. Please try again.';
+    };
+
+    const stopPollingAsFailed = (message) => {
+      clearInterval(pollRef.current);
+      setPollError(message);
+      setTaskData((prev) => ({
+        ...(prev || {}),
+        status: 'FAILURE',
+        progress: 0,
+        message,
+        error: message,
+      }));
+    };
+
     const poll = async () => {
       try {
         const r = await client.get(`/task-status/${taskId}`);
+        pollFailCountRef.current = 0;
+        setPollError('');
         setTaskData(r.data);
         if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(r.data.status)) {
           clearInterval(pollRef.current);
+          fetchHistory(); // Refresh history when a task completes
         }
-      } catch (_) {}
+      } catch (err) {
+        const message = pollStatusMessage(err);
+        pollFailCountRef.current += 1;
+        setPollError(message);
+        if (
+          pollFailCountRef.current >= MAX_POLL_ERRORS
+          || err.response?.status === 403
+          || err.response?.status === 404
+        ) {
+          stopPollingAsFailed(message);
+        }
+      }
     };
     poll();
     pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
@@ -215,6 +274,8 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setTaskId(r.data.task_id);
+      setPollError('');
+      pollFailCountRef.current = 0;
       setTaskData({ status: 'PENDING', progress: 0, message: 'Report queued.' });
     } catch (err) {
       setFormError(err.response?.data?.detail || 'Submission failed. Please try again.');
@@ -226,6 +287,8 @@ export default function Dashboard() {
   const reset = () => {
     setTaskId(null);
     setTaskData(null);
+    setPollError('');
+    pollFailCountRef.current = 0;
     setExcelFile(null);
     setCgpaFile(null);
     setGradeFile(null);
@@ -237,7 +300,7 @@ export default function Dashboard() {
       {/* Page header */}
       <div style={{ marginBottom: '28px' }}>
         <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', letterSpacing: '-0.5px' }}>
-          Generate Report
+          Report Dashboard
         </h1>
         <p style={{ margin: '6px 0 0', color: 'var(--color-text-muted)', fontSize: '14px' }}>
           Upload your mid-term Excel file and configure report parameters.
@@ -249,6 +312,7 @@ export default function Dashboard() {
         <TaskStatusCard
           taskId={taskId}
           {...taskData}
+          pollError={pollError}
           onReset={reset}
         />
       )}
@@ -430,6 +494,113 @@ export default function Dashboard() {
           </button>
         </form>
       )}
+
+      {/* History Section */}
+      <div style={{ marginTop: '48px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <History size={20} color="var(--color-primary)" />
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>Recent Reports</h2>
+          </div>
+          <button
+            onClick={fetchHistory}
+            disabled={loadingHistory}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              background: 'none', border: 'none', color: 'var(--color-text-muted)',
+              fontSize: '13px', fontWeight: '600', cursor: 'pointer',
+              transition: 'color 0.15s',
+            }}
+            onMouseOver={e => e.target.style.color = 'var(--color-primary)'}
+            onMouseOut={e => e.target.style.color = 'var(--color-text-muted)'}
+          >
+            <RefreshCw size={14} className={loadingHistory ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+
+        <Card style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--color-border)', background: 'var(--color-surface-2)' }}>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Date</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Semester</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Type</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Format</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Status</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600', textAlign: 'right' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.length === 0 && !loadingHistory && (
+                  <tr>
+                    <td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                      No reports generated yet.
+                    </td>
+                  </tr>
+                )}
+                {history.map((item) => (
+                  <tr key={item.task_id} style={{ borderBottom: '1px solid var(--color-border)', transition: 'background 0.1s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--color-surface-2)'} onMouseOut={e => e.currentTarget.style.background = 'none'}>
+                    <td style={{ padding: '14px 16px' }}>
+                      {new Date(item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td style={{ padding: '14px 16px', fontWeight: '500' }}>{item.semester}</td>
+                    <td style={{ padding: '14px 16px' }}>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: '600',
+                        background: item.learner_type === 'slow' ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                        color: item.learner_type === 'slow' ? '#fca5a5' : '#86efac',
+                        textTransform: 'capitalize'
+                      }}>
+                        {item.learner_type}
+                      </span>
+                    </td>
+                    <td style={{ padding: '14px 16px', color: 'var(--color-text-muted)' }}>
+                      Format {item.format_choice} ({item.output_type.toUpperCase()})
+                    </td>
+                    <td style={{ padding: '14px 16px' }}>
+                      <span style={{
+                        fontSize: '12px', fontWeight: '700',
+                        color: item.status === 'SUCCESS' ? 'var(--color-success)' :
+                               item.status === 'FAILURE' ? 'var(--color-danger)' :
+                               'var(--color-primary)'
+                      }}>
+                        {item.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                      {item.status === 'SUCCESS' && (
+                        <button
+                          onClick={() => downloadReport(item.task_id)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '6px',
+                            background: 'var(--color-surface-2)', border: '1px solid var(--color-border)',
+                            borderRadius: '6px', padding: '6px 10px', color: 'var(--color-text)',
+                            fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                          onMouseOver={e => {
+                            e.currentTarget.style.borderColor = 'var(--color-primary)';
+                            e.currentTarget.style.color = 'var(--color-primary)';
+                          }}
+                          onMouseOut={e => {
+                            e.currentTarget.style.borderColor = 'var(--color-border)';
+                            e.currentTarget.style.color = 'var(--color-text)';
+                          }}
+                        >
+                          <Download size={14} />
+                          Download
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }

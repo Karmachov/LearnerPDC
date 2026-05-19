@@ -15,11 +15,21 @@ from database import get_faculty_collection
 from models import TokenData
 
 # ---------------------------------------------------------------------------
-# Config
+# Config — JWT_SECRET is required; no insecure fallback
 # ---------------------------------------------------------------------------
-JWT_SECRET: str = os.environ.get("JWT_SECRET", "INSECURE_DEFAULT_CHANGE_ME")
+_INSECURE_PLACEHOLDERS = frozenset(
+    {"", "INSECURE_DEFAULT_CHANGE_ME", "CHANGE_ME_generate_a_random_hex_string"}
+)
+
+JWT_SECRET: str = os.environ.get("JWT_SECRET", "").strip()
+if JWT_SECRET in _INSECURE_PLACEHOLDERS:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set or still uses a placeholder. "
+        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+
 ALGORITHM: str = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 hours
+ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 

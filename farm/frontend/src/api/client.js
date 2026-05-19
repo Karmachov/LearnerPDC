@@ -33,4 +33,33 @@ client.interceptors.response.use(
   }
 );
 
+/**
+ * Download a generated report with JWT auth (plain <a href> cannot send Bearer tokens).
+ */
+export async function downloadReport(taskId) {
+  const response = await client.get(`/download/${taskId}`, {
+    responseType: 'blob',
+    timeout: 120000,
+  });
+
+  const disposition = response.headers['content-disposition'] || '';
+  let filename = `report_${taskId.slice(0, 8)}`;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";\n]+)"?/i);
+  if (utf8Match) {
+    filename = decodeURIComponent(utf8Match[1]);
+  } else if (plainMatch) {
+    filename = plainMatch[1];
+  }
+
+  const blobUrl = window.URL.createObjectURL(response.data);
+  const anchor = document.createElement('a');
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 export default client;

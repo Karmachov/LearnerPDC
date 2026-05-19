@@ -5,7 +5,7 @@ main.py — FastAPI application: all routes, lifespan, CORS.
 from __future__ import annotations
 
 import os
-import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,11 +39,15 @@ from database import (
     encrypt_str,
     get_faculty_collection,
 )
+from shared.audit import audit_log_async
+from shared.pem_validation import normalize_passphrase, validate_pem_key_pair
 from models import (
     FacultyCreate,
     FacultyProfile,
     GenerateReportResponse,
     ProfileUpdateResponse,
+    ReportHistoryItem,
+    ReportHistoryResponse,
     ReportRequest,
     TaskStatusResponse,
     Token,
@@ -90,6 +94,16 @@ async def startup():
     """Ensure MongoDB indexes exist."""
     col = get_faculty_collection()
     await col.create_index("email", unique=True)
+    from shared.mongo import get_audit_logs_collection, get_tasks_collection
+
+    audit_col = get_audit_logs_collection()
+    await audit_col.create_index("created_at")
+    await audit_col.create_index([("faculty_id", 1), ("created_at", -1)])
+    await audit_col.create_index("task_id", sparse=True)
+
+    tasks_col = get_tasks_collection()
+    await tasks_col.create_index("task_id", unique=True)
+    await tasks_col.create_index([("faculty_id", 1), ("created_at", -1)])
 
 
 @app.on_event("shutdown")
@@ -123,6 +137,11 @@ async def register(payload: FacultyCreate):
     }
     result = await col.insert_one(doc)
     created = await col.find_one({"_id": result.inserted_id})
+    await audit_log_async(
+        "auth.register",
+        faculty_id=str(result.inserted_id),
+        details={"email": payload.email},
+    )
     return _faculty_to_profile(created)
 
 
@@ -137,6 +156,7 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = create_access_token({"sub": str(faculty["_id"])})
+    await audit_log_async("auth.login", faculty_id=str(faculty["_id"]))
     return Token(access_token=token)
 
 
@@ -177,10 +197,11 @@ async def upload_keys(
     key_bytes = await private_key.read()
     cert_bytes = await certificate.read()
 
-    if not key_bytes.strip().startswith(b"-----BEGIN"):
-        raise HTTPException(status_code=400, detail="Private key must be a valid PEM file.")
-    if not cert_bytes.strip().startswith(b"-----BEGIN"):
-        raise HTTPException(status_code=400, detail="Certificate must be a valid PEM file.")
+    passphrase = normalize_passphrase(key_password)
+    try:
+        validate_pem_key_pair(key_bytes, cert_bytes, passphrase)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     col = get_faculty_collection()
     await col.update_one(
@@ -189,9 +210,14 @@ async def upload_keys(
             "$set": {
                 "private_key_enc": encrypt_bytes(key_bytes),
                 "certificate_enc": encrypt_bytes(cert_bytes),
-                "key_password_enc": encrypt_str(key_password),
+                "key_password_enc": encrypt_str(passphrase),
             }
         },
+    )
+    await audit_log_async(
+        "profile.keys_uploaded",
+        faculty_id=str(faculty["_id"]),
+        file_size_bytes=len(key_bytes) + len(cert_bytes),
     )
     return ProfileUpdateResponse(message="Private key and certificate saved securely.")
 
@@ -244,8 +270,10 @@ async def generate_report(
     task_upload_dir.mkdir(parents=True)
 
     excel_path = str(task_upload_dir / f"main{ext}")
+    excel_bytes = await excel_file.read()
+    excel_size = len(excel_bytes)
     with open(excel_path, "wb") as f:
-        f.write(await excel_file.read())
+        f.write(excel_bytes)
 
     cgpa_path = None
     if cgpa_file and cgpa_file.filename:
@@ -261,7 +289,7 @@ async def generate_report(
         with open(grade_path, "wb") as f:
             f.write(await grade_file.read())
 
-    # --- Signing: verify keys exist in DB if needed ---
+    # --- Signing: verify keys exist and passphrase unlocks the key before queuing ---
     if req.enable_signing:
         if not faculty.get("private_key_enc") or not faculty.get("certificate_enc"):
             raise HTTPException(
@@ -269,13 +297,46 @@ async def generate_report(
                 detail="Digital signing is enabled but no private key/certificate is stored. "
                        "Please upload them via Profile Settings first.",
             )
+        if not faculty.get("key_password_enc"):
+            raise HTTPException(
+                status_code=400,
+                detail="No key passphrase is stored. Re-upload your private key and certificate in Profile Settings.",
+            )
+        try:
+            stored_key = decrypt_bytes(faculty["private_key_enc"])
+            stored_cert = decrypt_bytes(faculty["certificate_enc"])
+            stored_pass = normalize_passphrase(decrypt_str(faculty["key_password_enc"]))
+            validate_pem_key_pair(stored_key, stored_cert, stored_pass)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    # --- Record task ownership (authorizes status + download) ---
+    from shared.mongo import get_tasks_collection
+
+    faculty_id = str(faculty["_id"])
+    tasks_col = get_tasks_collection()
+    await tasks_col.insert_one(
+        {
+            "task_id": task_id,
+            "faculty_id": faculty_id,
+            "status": "queued",
+            "created_at": datetime.now(timezone.utc),
+            "semester": req.semester,
+            "learner_type": req.learner_type,
+            "format_choice": req.format_choice,
+            "output_type": req.output_type,
+        }
+    )
 
     # --- Dispatch Celery task ---
     from celery_app import celery_app  # import here to avoid startup side-effects
 
     task_payload = {
         "task_id": task_id,
-        "faculty_id": str(faculty["_id"]),
+        "faculty_id": faculty_id,
         "excel_path": excel_path,
         "cgpa_path": cgpa_path,
         "grade_path": grade_path,
@@ -291,13 +352,69 @@ async def generate_report(
         "enable_signing": req.enable_signing,
     }
 
-    celery_app.send_task("generate_report_task", args=[task_payload], task_id=task_id)
+    try:
+        celery_app.send_task("generate_report_task", args=[task_payload], task_id=task_id)
+    except Exception as exc:
+        await tasks_col.delete_one({"task_id": task_id})
+        shutil.rmtree(task_upload_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not queue the report. Please try again in a moment.",
+        ) from exc
+
+    await audit_log_async(
+        "report.queued",
+        faculty_id=faculty_id,
+        task_id=task_id,
+        file_size_bytes=excel_size,
+        details={
+            "semester": req.semester,
+            "learner_type": req.learner_type,
+            "format_choice": req.format_choice,
+            "output_type": req.output_type,
+            "enable_signing": req.enable_signing,
+        },
+    )
 
     return GenerateReportResponse(task_id=task_id)
 
 
+@app.get("/reports", response_model=ReportHistoryResponse)
+async def get_reports(faculty: dict = Depends(get_current_faculty)):
+    """Fetch the last 50 reports generated by this faculty."""
+    from shared.mongo import get_tasks_collection
+    from celery.result import AsyncResult
+    from celery_app import celery_app
+
+    tasks_col = get_tasks_collection()
+    cursor = tasks_col.find({"faculty_id": str(faculty["_id"])}).sort("created_at", -1).limit(50)
+    docs = await cursor.to_list(length=50)
+
+    reports = []
+    for d in docs:
+        # Check current status from Celery
+        res = AsyncResult(d["task_id"], app=celery_app)
+        status_str = res.state if res.state else d.get("status", "queued")
+
+        reports.append(
+            ReportHistoryItem(
+                task_id=d["task_id"],
+                status=status_str,
+                semester=d.get("semester", "N/A"),
+                learner_type=d.get("learner_type", "N/A"),
+                format_choice=d.get("format_choice", "N/A"),
+                output_type=d.get("output_type", "N/A"),
+                created_at=d["created_at"],
+            )
+        )
+
+    return ReportHistoryResponse(reports=reports)
+
+
 @app.get("/task-status/{task_id}", response_model=TaskStatusResponse)
-async def task_status(task_id: str, _: dict = Depends(get_current_faculty)):
+async def task_status(task_id: str, faculty: dict = Depends(get_current_faculty)):
+    await _require_task_owner(task_id, faculty)
+
     from celery.result import AsyncResult
     from celery_app import celery_app
 
@@ -332,15 +449,30 @@ async def task_status(task_id: str, _: dict = Depends(get_current_faculty)):
             status="FAILURE",
             message="Report generation failed.",
             progress=0,
-            error=str(result.info),
+            error=_safe_task_error(result.info),
         )
 
-    return TaskStatusResponse(task_id=task_id, status=state, message=state)  # type: ignore[arg-type]
+    if state == "REVOKED":
+        return TaskStatusResponse(
+            task_id=task_id,
+            status="REVOKED",
+            message="Report generation was cancelled.",
+            progress=0,
+        )
+
+    return TaskStatusResponse(
+        task_id=task_id,
+        status="FAILURE",
+        message=f"Unexpected task state ({state}).",
+        progress=0,
+        error="Report generation failed. Please try again.",
+    )
 
 
 @app.get("/download/{task_id}")
-async def download_report(task_id: str, _: dict = Depends(get_current_faculty)):
+async def download_report(task_id: str, faculty: dict = Depends(get_current_faculty)):
     """Serve the generated report file from the shared volume."""
+    await _require_task_owner(task_id, faculty)
     task_report_dir = REPORTS_DIR / task_id
     if not task_report_dir.exists():
         raise HTTPException(status_code=404, detail="Report not found or not yet generated.")
@@ -377,6 +509,44 @@ async def download_report(task_id: str, _: dict = Depends(get_current_faculty)):
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
+async def _require_task_owner(task_id: str, faculty: dict) -> None:
+    """Ensure the authenticated faculty owns this task (prevents IDOR on status/download)."""
+    from shared.mongo import get_tasks_collection
+
+    doc = await get_tasks_collection().find_one({"task_id": task_id})
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    if doc.get("faculty_id") != str(faculty["_id"]):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this task.",
+        )
+
+
+def _safe_task_error(info) -> str:
+    """Extract a user-safe error string from Celery result metadata (no tracebacks)."""
+    if info is None:
+        return "Report generation failed. Please try again."
+
+    if isinstance(info, dict):
+        exc_type = info.get("exc_type") or info.get("type", "")
+        if exc_type in ("ReportTaskError", "shared.task_errors.ReportTaskError"):
+            msg = info.get("exc_message") or info.get("message")
+            if isinstance(msg, (list, tuple)) and msg:
+                return str(msg[0])[:300]
+            if msg:
+                return str(msg)[:300]
+        return "Report generation failed. Please check your Excel file and try again."
+
+    text = str(info)
+    if "Traceback" in text or "File \"" in text:
+        return "Report generation failed. Please check your Excel file and try again."
+    return text[:300]
+
 
 def _faculty_to_profile(doc: dict) -> FacultyProfile:
     return FacultyProfile(

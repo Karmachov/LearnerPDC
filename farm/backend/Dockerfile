@@ -13,14 +13,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi8 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 # --prefer-binary forces pip to choose pre-compiled manylinux/musllinux wheels
 # for packages like cryptography, bcrypt, and pydantic-core instead of
 # building from source tarballs.
 RUN pip install --upgrade pip --no-cache-dir && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-COPY . .
+COPY shared /app/shared
+COPY backend /app
+
+ENV PYTHONPATH=/app
 
 # Shared volume mount point
 RUN mkdir -p /data/shared/uploads /data/shared/reports
