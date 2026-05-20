@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Reports from './pages/Reports';
 import Profile from './pages/Profile';
 
 function ProtectedLayout({ children }) {
@@ -44,6 +45,14 @@ export default function App() {
             element={
               <ProtectedLayout>
                 <Dashboard />
+              </ProtectedLayout>
+            }
+          />
+          <Route
+            path="/reports"
+            element={
+              <ProtectedLayout>
+                <Reports />
               </ProtectedLayout>
             }
           />

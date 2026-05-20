@@ -108,7 +108,7 @@ function UploadSection({ title, icon, children, onSubmit, loading, success, erro
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <div style={{
           width: 36, height: 36, borderRadius: 10,
-          background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2))',
+          background: 'linear-gradient(135deg, rgba(132,169,140,0.2), rgba(132,169,140,0.05))',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {icon}
@@ -144,12 +144,12 @@ function UploadSection({ title, icon, children, onSubmit, loading, success, erro
         onClick={onSubmit}
         disabled={loading}
         style={{
-          background: loading ? 'var(--color-surface-2)' : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+          background: loading ? 'var(--color-surface-2)' : 'linear-gradient(135deg, var(--color-primary), var(--color-primary-hover))',
           color: loading ? 'var(--color-text-muted)' : 'white',
           border: 'none', borderRadius: 10, padding: '10px 22px',
           fontWeight: 700, fontSize: 14, cursor: loading ? 'not-allowed' : 'pointer',
           display: 'flex', alignItems: 'center', gap: 7, transition: 'all 0.15s',
-          boxShadow: loading ? 'none' : '0 4px 14px rgba(124,58,237,0.35)',
+          boxShadow: loading ? 'none' : '0 4px 14px rgba(132,169,140,0.35)',
         }}
       >
         {loading ? <><RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</> : 'Save to Vault'}
@@ -166,6 +166,12 @@ export default function Profile() {
   const [sigLoading, setSigLoading] = useState(false);
   const [sigSuccess, setSigSuccess] = useState('');
   const [sigError, setSigError] = useState('');
+
+  // Photo upload state
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoSuccess, setPhotoSuccess] = useState('');
+  const [photoError, setPhotoError] = useState('');
 
   // Key upload state
   const [keyFile, setKeyFile] = useState(null);
@@ -184,13 +190,27 @@ export default function Profile() {
       fd.append('image', sigFile);
       await client.put('/profile/signature', fd);
       setSigSuccess('Signature image encrypted and saved to the secure vault.');
-      // Refresh the faculty profile so the status badge updates immediately
-      // (no page reload required).
       await refreshFaculty();
     } catch (err) {
       setSigError(parseUploadError(err));
     } finally {
       setSigLoading(false);
+    }
+  };
+
+  const uploadPhoto = async () => {
+    if (!photoFile) { setPhotoError('Please select a photo file.'); return; }
+    setPhotoError(''); setPhotoSuccess(''); setPhotoLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append('image', photoFile);
+      await client.put('/profile/photo', fd);
+      setPhotoSuccess('Profile photo updated successfully.');
+      await refreshFaculty();
+    } catch (err) {
+      setPhotoError(parseUploadError(err));
+    } finally {
+      setPhotoLoading(false);
     }
   };
 
@@ -231,14 +251,25 @@ export default function Profile() {
 
         {/* Faculty info card */}
         <Card style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
-          <div style={{
-            width: 54, height: 54, borderRadius: '50%',
-            background: 'linear-gradient(135deg, #7c3aed, #06b6d4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 22, fontWeight: 700, color: 'white', flexShrink: 0,
-          }}>
-            {faculty?.name?.[0]?.toUpperCase() || '?'}
-          </div>
+          {faculty?.has_photo ? (
+            <img 
+              src={`/api/faculty/${faculty._id}/photo`} 
+              alt={faculty.name}
+              style={{
+                width: 54, height: 54, borderRadius: '50%', objectFit: 'cover',
+                border: '1px solid var(--color-border)', flexShrink: 0
+              }}
+            />
+          ) : (
+            <div style={{
+              width: 54, height: 54, borderRadius: '50%',
+              background: 'linear-gradient(135deg, var(--color-primary), var(--color-primary-hover))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 22, fontWeight: 700, color: 'white', flexShrink: 0,
+            }}>
+              {faculty?.name?.[0]?.toUpperCase() || '?'}
+            </div>
+          )}
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{faculty?.name}</div>
             <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{faculty?.role} · {faculty?.department}</div>
@@ -252,10 +283,31 @@ export default function Profile() {
         </Card>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          {/* Profile Photo upload */}
+          <UploadSection
+            title="Profile Photo"
+            icon={<ImageIcon size={18} color="var(--color-primary)" />}
+            onSubmit={uploadPhoto}
+            loading={photoLoading}
+            success={photoSuccess}
+            error={photoError}
+          >
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 0, marginBottom: 16 }}>
+              Update your profile photo. JPEG or PNG format.
+            </p>
+            <FileDropZone
+              label="Profile Photo"
+              accept="image/png,image/jpeg,image/webp"
+              file={photoFile}
+              setFile={setPhotoFile}
+              hint="Drop PNG/JPEG here or click to browse…"
+            />
+          </UploadSection>
+
           {/* Signature upload */}
           <UploadSection
             title="Signature Image"
-            icon={<ImageIcon size={18} color="#a78bfa" />}
+            icon={<ImageIcon size={18} color="var(--color-primary)" />}
             onSubmit={uploadSignature}
             loading={sigLoading}
             success={sigSuccess}
@@ -276,7 +328,7 @@ export default function Profile() {
           {/* Key upload */}
           <UploadSection
             title="Signing Credentials"
-            icon={<Key size={18} color="#a78bfa" />}
+            icon={<Key size={18} color="var(--color-primary)" />}
             onSubmit={uploadKeys}
             loading={keyLoading}
             success={keySuccess}

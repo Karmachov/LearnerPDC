@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 
 from auth import (
@@ -184,6 +184,38 @@ async def upload_signature(
     col = get_faculty_collection()
     await col.update_one({"_id": faculty["_id"]}, {"$set": {"signature_image_enc": encrypted}})
     return ProfileUpdateResponse(message="Signature image saved securely.")
+
+
+@app.put("/profile/photo", response_model=ProfileUpdateResponse)
+async def upload_profile_photo(
+    image: UploadFile = File(...),
+    faculty: dict = Depends(get_current_faculty),
+):
+    """Save the faculty's profile photo to MongoDB."""
+    if image.content_type not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
+        raise HTTPException(status_code=400, detail="Photo must be a PNG, JPEG, or WEBP image.")
+    raw = await image.read()
+    if len(raw) > 2 * 1024 * 1024:  # 2 MB cap
+        raise HTTPException(status_code=400, detail="Image must be under 2 MB.")
+    col = get_faculty_collection()
+    await col.update_one({"_id": faculty["_id"]}, {"$set": {"profile_photo": raw, "profile_photo_mime": image.content_type}})
+    return ProfileUpdateResponse(message="Profile photo saved successfully.")
+
+
+@app.get("/faculty/{faculty_id}/photo")
+async def get_profile_photo(faculty_id: str):
+    """Retrieve the faculty's profile photo."""
+    try:
+        obj_id = ObjectId(faculty_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+    
+    col = get_faculty_collection()
+    doc = await col.find_one({"_id": obj_id}, {"profile_photo": 1, "profile_photo_mime": 1})
+    if not doc or not doc.get("profile_photo"):
+        raise HTTPException(status_code=404, detail="Photo not found")
+        
+    return Response(content=doc["profile_photo"], media_type=doc.get("profile_photo_mime", "image/jpeg"))
 
 
 @app.put("/profile/keys", response_model=ProfileUpdateResponse)
@@ -634,6 +666,7 @@ def _faculty_to_profile(doc: dict) -> FacultyProfile:
             "name": doc["name"],
             "role": doc["role"],
             "department": doc["department"],
+            "has_photo": doc.get("profile_photo") is not None,
             "has_signature": doc.get("signature_image_enc") is not None,
             "has_private_key": doc.get("private_key_enc") is not None,
             "has_certificate": doc.get("certificate_enc") is not None,

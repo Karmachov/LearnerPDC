@@ -56,6 +56,7 @@ class FacultyProfile(BaseModel):
     name: str
     role: str
     department: str
+    has_photo: bool = False
     has_signature: bool = False
     has_private_key: bool = False
     has_certificate: bool = False

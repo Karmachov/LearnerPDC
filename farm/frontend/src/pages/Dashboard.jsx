@@ -4,11 +4,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import client, { downloadReport, downloadProofs } from '../api/client';
+import client from '../api/client';
 import TaskStatusCard from '../components/TaskStatusCard';
 import {
   FileSpreadsheet, Upload, ChevronDown, AlertTriangle, Zap,
-  FileText, Table2, BookOpen, Layers, Star, History, Download, RefreshCw, X
+  FileText, Table2, BookOpen, Layers, Star, X
 } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 2500;
@@ -243,8 +243,6 @@ export default function Dashboard() {
   // Task state
   const [taskId, setTaskId] = useState(null);
   const [taskData, setTaskData] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [pollError, setPollError] = useState('');
@@ -253,22 +251,6 @@ export default function Dashboard() {
 
   // Signing warning
   const signingMissing = enableSigning && (!faculty?.has_private_key || !faculty?.has_certificate);
-
-  const fetchHistory = async () => {
-    setLoadingHistory(true);
-    try {
-      const r = await client.get('/reports');
-      setHistory(r.data.reports);
-    } catch (err) {
-      console.error('Failed to fetch history:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchHistory();
-  }, []);
 
   // Polling
   useEffect(() => {
@@ -305,7 +287,6 @@ export default function Dashboard() {
         setTaskData(r.data);
         if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(r.data.status)) {
           clearInterval(pollRef.current);
-          fetchHistory(); // Refresh history when a task completes
         }
       } catch (err) {
         const message = pollStatusMessage(err);
@@ -447,12 +428,12 @@ export default function Dashboard() {
                     display: 'flex', alignItems: 'flex-start', gap: 10,
                     background: 'rgba(245,158,11,0.1)',
                     border: '1px solid rgba(245,158,11,0.3)',
-                    borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#fcd34d',
+                    borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--color-warning)',
                   }}>
                     <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
                     <span>
                       Private key or certificate not found in your profile.{' '}
-                      <a href="/profile" style={{ color: '#fbbf24', fontWeight: 600 }}>Upload them →</a>
+                      <a href="/profile" style={{ color: 'var(--color-warning)', fontWeight: 600 }}>Upload them →</a>
                     </span>
                   </div>
                 )}
@@ -546,7 +527,7 @@ export default function Dashboard() {
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
               background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: 10, padding: '12px 16px', fontSize: 14, color: '#fca5a5',
+              borderRadius: 10, padding: '12px 16px', fontSize: 14, color: 'var(--color-danger)',
               marginTop: 16,
             }}>
               <AlertTriangle size={15} />
@@ -561,7 +542,7 @@ export default function Dashboard() {
             style={{
               marginTop: '20px',
               width: '100%',
-              background: submitting ? 'var(--color-surface-2)' : 'linear-gradient(135deg, #7c3aed, #06b6d4)',
+              background: submitting ? 'var(--color-surface-2)' : 'linear-gradient(135deg, var(--color-primary), var(--color-primary-hover))',
               color: submitting ? 'var(--color-text-muted)' : 'white',
               border: 'none',
               borderRadius: '12px',
@@ -583,160 +564,6 @@ export default function Dashboard() {
         </form>
       )}
 
-      {/* History Section */}
-      <div style={{ marginTop: '48px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <History size={20} color="var(--color-primary)" />
-            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>Recent Reports</h2>
-          </div>
-          <button
-            onClick={fetchHistory}
-            disabled={loadingHistory}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              background: 'var(--color-surface)', border: '1px solid var(--color-border)',
-              borderRadius: '6px', padding: '6px 12px', color: 'var(--color-text)',
-              fontSize: '12px', fontWeight: '600', cursor: 'pointer',
-              transition: 'all 0.15s'
-            }}
-            onMouseOver={e => {
-              e.currentTarget.style.borderColor = 'var(--color-primary)';
-              e.currentTarget.style.color = 'var(--color-primary)';
-            }}
-            onMouseOut={e => {
-              e.currentTarget.style.borderColor = 'var(--color-border)';
-              e.currentTarget.style.color = 'var(--color-text)';
-            }}
-          >
-            <RefreshCw size={14} className={loadingHistory ? 'animate-spin' : ''} />
-            Refresh
-          </button>
-        </div>
-
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--color-border)', background: 'var(--color-surface-2)' }}>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Date</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Semester</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Type</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Format</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Status</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Proofs</th>
-                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600', textAlign: 'right' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.length === 0 && !loadingHistory && (
-                  <tr>
-                    <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-                      No reports generated yet.
-                    </td>
-                  </tr>
-                )}
-                {(showAllReports ? history : history.slice(0, 5)).map((item) => (
-                  <tr key={item.task_id} style={{ borderBottom: '1px solid var(--color-border)', transition: 'background 0.1s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--color-surface-2)'} onMouseOut={e => e.currentTarget.style.background = 'none'}>
-                    <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                      {new Date(item.created_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '')}
-                    </td>
-                    <td style={{ padding: '14px 16px', fontWeight: '500' }}>{item.semester}</td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <span style={{
-                        padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: '600',
-                        background: item.learner_type === 'slow' ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
-                        color: item.learner_type === 'slow' ? '#fca5a5' : '#86efac',
-                        textTransform: 'capitalize'
-                      }}>
-                        {item.learner_type}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px 16px', color: 'var(--color-text-muted)' }}>
-                      Format {item.format_choice} ({item.output_type.toUpperCase()})
-                    </td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <span style={{
-                        fontSize: '12px', fontWeight: '700',
-                        color: item.status === 'SUCCESS' ? 'var(--color-success)' :
-                               item.status === 'FAILURE' ? 'var(--color-danger)' :
-                               'var(--color-primary)'
-                      }}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px 16px' }}>
-                      {item.has_proofs && item.status === 'SUCCESS' && (
-                        <button
-                          onClick={() => downloadProofs(item.task_id)}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '6px',
-                            background: 'none', border: '1px solid var(--color-border)',
-                            borderRadius: '6px', padding: '6px 10px', color: 'var(--color-text)',
-                            fontSize: '12px', fontWeight: '600', cursor: 'pointer',
-                            transition: 'all 0.15s'
-                          }}
-                          onMouseOver={e => {
-                            e.currentTarget.style.borderColor = 'var(--color-primary)';
-                            e.currentTarget.style.color = 'var(--color-primary)';
-                          }}
-                          onMouseOut={e => {
-                            e.currentTarget.style.borderColor = 'var(--color-border)';
-                            e.currentTarget.style.color = 'var(--color-text)';
-                          }}
-                        >
-                          <Download size={14} />
-                          ZIP
-                        </button>
-                      )}
-                      {!item.has_proofs && <span style={{ color: 'var(--color-text-muted)', fontSize: '13px' }}>-</span>}
-                    </td>
-                    <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                      {item.status === 'SUCCESS' && (
-                        <button
-                          onClick={() => downloadReport(item.task_id)}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '6px',
-                            background: 'var(--color-surface-2)', border: '1px solid var(--color-border)',
-                            borderRadius: '6px', padding: '6px 10px', color: 'var(--color-text)',
-                            fontSize: '12px', fontWeight: '600', cursor: 'pointer',
-                            transition: 'all 0.15s'
-                          }}
-                          onMouseOver={e => {
-                            e.currentTarget.style.borderColor = 'var(--color-primary)';
-                            e.currentTarget.style.color = 'var(--color-primary)';
-                          }}
-                          onMouseOut={e => {
-                            e.currentTarget.style.borderColor = 'var(--color-border)';
-                            e.currentTarget.style.color = 'var(--color-text)';
-                          }}
-                        >
-                          <Download size={14} />
-                          Download
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            
-            {history.length > 5 && (
-              <div style={{ textAlign: 'center', padding: '12px', background: 'var(--color-surface)' }}>
-                <button
-                  onClick={() => setShowAllReports(!showAllReports)}
-                  style={{
-                    background: 'none', border: 'none', color: 'var(--color-primary)',
-                    fontSize: '13px', fontWeight: '600', cursor: 'pointer',
-                  }}
-                >
-                  {showAllReports ? 'Collapse All' : `View More (${history.length - 5})`}
-                </button>
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }
