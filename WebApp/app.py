@@ -175,4 +175,4 @@ def generate_report():
 
 if __name__ == '__main__':
     # Using port 5001 as per your original configuration
-    app.run(host='0.0.0.0', debug=True, port=5001)
+    app.run(host='0.0.0.0', debug=True, port=5001, reloader_type='stat')

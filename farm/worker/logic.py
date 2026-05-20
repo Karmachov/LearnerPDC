@@ -103,16 +103,21 @@ def sign_pdf(pdf_path: str, key_bytes: bytes, cert_bytes: bytes, image_bytes: by
                 is_valid_image = False
 
         signdata = {
-            'sigflags': 1,  # Invisible signature to avoid visual clutter/spam
+            'sigflags': 3,  # Visible signature
             'contact': 'faculty@manipal.edu',
             'location': 'Manipal, India',
             'reason': 'Verified Learner Report',
             'signingdate': date,
             'page': 0,
+            'signaturebox': (400, 70, 540, 110), # Coordinates for the visual digital signature block
+            'signature_manual': [
+                'Digitally signed by Faculty',
+                f'Date: {date}',
+                'Reason: Verified Learner Report'
+            ]
         }
-        # We no longer add signature_img or signaturebox here because the 
-        # BaseFormatter already adds the signature image above the signature lines
-        # in the Word document, which is more accurate.
+        # The BaseFormatter already adds the signature image above the signature lines in the Word document.
+        # Here we just add the visual digital signature block (text) via the signaturebox.
 
         try:
             signed_bytes = endesive_pdf.cms.sign(
@@ -237,12 +242,22 @@ class DataReader:
             if len(df.columns) >= 3:
                 enroll_col, course_col, grade_col = df.columns[0], df.columns[1], df.columns[2]
                 if course_code:
-                    target = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
-                    df = df[df[course_col].astype(str).str.contains(target, case=False, na=False)]
+                    target_code = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
+                    target_name = course_code.split('(')[0].strip() if '(' in course_code else course_code
+                    clean_course_col = df[course_col].astype(str).str.replace(' ', '').str.lower()
+                    mask = clean_course_col.str.contains(target_code.replace(' ', '').lower(), regex=False, na=False) | \
+                           clean_course_col.str.contains(target_name.replace(' ', '').lower(), regex=False, na=False)
+                    if mask.any():
+                        df = df[mask]
+                df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
+                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+            elif len(df.columns) == 2:
+                enroll_col, grade_col = df.columns[0], df.columns[1]
                 df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
                 return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
             return {}
-        except Exception:
+        except Exception as e:
+            print(f"Error reading grade map: {e}")
             return {}
 
 

@@ -54,9 +54,9 @@ def sign_pdf(pdf_path, key_path, cert_path, image_path, password):
         signed_pdf_bytes = pdf.cms.sign(pdf_data, signdata, key=private_key, cert=certificate, othercerts=())
         with open(pdf_path, 'wb') as f_out: 
             f_out.write(pdf_data + signed_pdf_bytes)
-        return True
-    except Exception:
-        return False
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 def normalize_registration_number(reg_num):
     if pd.isna(reg_num) or reg_num is None:
@@ -67,37 +67,50 @@ def normalize_registration_number(reg_num):
 
 # --- DATA READER ---
 class DataReader:
-    COLUMN_MAPPING = {
-        'Roll Number': 'Register Number of the Student', 
-        'Student Name': 'Student Name',
-        'Total (30) *': 'Midterm Exam Marks (Out of 30)', 
-        'Student Viewed': 'Did student view the paper'
-    }
-
     def _extract_subject_from_header(self, file_path):
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             df_header = pd.read_excel(file_path, engine=engine, nrows=5, header=None)
             for val in df_header.iloc[:, 0]:
                 if val and isinstance(val, str) and "Exam:" in val:
-                    last_slash = val.rfind('/')
-                    first_bracket = val.find('[')
-                    last_bracket = val.find(']')
-                    if last_slash != -1 and first_bracket != -1:
-                        name = val[last_slash + 1 : first_bracket].strip()
-                        code = val[first_bracket + 1 : last_bracket].strip() if last_bracket != -1 else ""
-                        return f"{name} ({code})" if code else name
-            return None
-        except Exception: return None
+                    cleaned = val.replace("Exam:", "").strip()
+                    # Try to match formats like "Some Term / Subject Name [CODE]" or "- Subject Name (CODE)"
+                    match = re.search(r'(?:/|-)?\s*([A-Za-z0-9\s&]+?)\s*(?:\[|\()([A-Za-z0-9]+)(?:\]|\))', cleaned)
+                    if match:
+                        name = match.group(1).strip()
+                        code = match.group(2).strip()
+                        return f"{name} ({code})"
+                    
+                    # Fallback if no code in brackets/parentheses is found
+                    last_sep = max(cleaned.rfind('/'), cleaned.rfind('-'))
+                    if last_sep != -1:
+                        return cleaned[last_sep+1:].strip()
+                    
+                    return cleaned
+            return "Unknown Subject"
+        except Exception: 
+            return "Unknown Subject"
 
     def read_data(self, file_path):
         subject_name = self._extract_subject_from_header(file_path)
-        if not subject_name: raise ValueError("Could not auto-detect subject name.")
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             df = pd.read_excel(file_path, skiprows=2, engine=engine)
-            df.columns = df.columns.str.strip()
-            df.rename(columns=self.COLUMN_MAPPING, inplace=True)
+            df.columns = df.columns.astype(str).str.strip()
+            
+            # Flexible Column Mapping using substring matching
+            mapped_columns = {}
+            for col in df.columns:
+                col_lower = col.lower()
+                if 'roll' in col_lower or 'reg' in col_lower:
+                    mapped_columns[col] = 'Register Number of the Student'
+                elif 'name' in col_lower:
+                    mapped_columns[col] = 'Student Name'
+                elif 'total' in col_lower:
+                    mapped_columns[col] = 'Midterm Exam Marks (Out of 30)'
+            
+            df.rename(columns=mapped_columns, inplace=True)
+            
             reg_col = 'Register Number of the Student'
             if reg_col in df.columns:
                 df[reg_col] = df[reg_col].apply(normalize_registration_number)
@@ -154,6 +167,8 @@ class DataReader:
 # --- DATA PROCESSOR ---
 class StudentDataProcessor:
     def _calculate_midterm_percentage(self, marks):
+        if pd.isna(marks) or str(marks).strip().upper() in ['AB', 'ABSENT', 'NE', 'N/A']:
+            return 'ABSENT'
         try: return (float(marks) / MIDTERM_TOTAL_MARKS) * 100
         except: return 0
 
@@ -178,10 +193,16 @@ class StudentDataProcessor:
         return all_student_data
 
     def filter_students(self, students, learner_type, slow_thresh, advanced_thresh):
-        if learner_type == 'slow':
-            filtered = [s for s in students if s['MidtermPercentage'] < slow_thresh]
-        else:
-            filtered = [s for s in students if s['MidtermPercentage'] > advanced_thresh]
+        filtered = []
+        for s in students:
+            pct = s['MidtermPercentage']
+            if isinstance(pct, (int, float)):
+                if learner_type == 'slow' and pct < slow_thresh:
+                    filtered.append(s)
+                elif learner_type == 'advanced' and pct > advanced_thresh:
+                    filtered.append(s)
+            elif learner_type == 'slow' and pct == 'ABSENT':
+                filtered.append(s)
         filtered.sort(key=lambda s: s.get('Register Number of the Student', ''))
         return filtered
 
@@ -237,7 +258,9 @@ class BaseFormatter:
         
         self.set_cell_properties(pt.cell(1, 0), '1', align='CENTER')
         self.set_cell_properties(pt.cell(1, 1), f"Scores obtained by student class test / internal examination...\nConsidered Midterm exam conducted for {MIDTERM_TOTAL_MARKS}M:")
-        self.set_cell_properties(pt.cell(1, 2), f"{student.get('MidtermPercentage', 0):.2f}", align='CENTER', font_name=self.BODY_FONT)
+        pct = student.get('MidtermPercentage', 0)
+        pct_str = f"{pct:.2f}" if isinstance(pct, (int, float)) else str(pct)
+        self.set_cell_properties(pt.cell(1, 2), pct_str, align='CENTER', font_name=self.BODY_FONT)
         self.set_cell_properties(pt.cell(1, 3), "> %", align='CENTER')
         
         self.set_cell_properties(pt.cell(2, 0), '2', align='CENTER')
@@ -271,7 +294,7 @@ class BaseFormatter:
             self.set_cell_properties(ct.cell(i, 0), label)
             val = student.get(key, '')
             if key == 'Semester': val = self.get_year_semester_string(val)
-            elif key == 'MidtermPercentage': val = f"{val:.2f}%"
+            elif key == 'MidtermPercentage': val = f"{val:.2f}%" if isinstance(val, (int, float)) else str(val)
             elif key == 'Subject Name': val = str(val).upper()
             self.set_cell_properties(ct.cell(i, 1), str(val).replace(';', '\n'), font_name=self.BODY_FONT)
             
@@ -311,7 +334,9 @@ class Format3DocxFormatter(BaseFormatter):
             rc = t.add_row().cells; self.set_cell_properties(rc[0], str(idx+1))
             self.set_cell_properties(rc[1], row['Register Number of the Student'])
             self.set_cell_properties(rc[2], row['Student Name'])
-            self.set_cell_properties(rc[3], f"{row['MidtermPercentage']:.2f}")
+            pct = row['MidtermPercentage']
+            pct_str = f"{pct:.2f}" if isinstance(pct, (int, float)) else str(pct)
+            self.set_cell_properties(rc[3], pct_str)
             self.set_cell_properties(rc[4], row['Outcome (Based on clearance in end-semester or makeup exam)'])
         self.add_signature_line(doc); return doc
 
@@ -335,7 +360,10 @@ class PdfWriter:
             if os.path.exists(os.path.join(td, "temp.pdf")):
                 import shutil; shutil.move(os.path.join(td, "temp.pdf"), out)
                 if sign_info and sign_info.get('should_sign') and format_choice in ['1','2','4','5']:
-                    sign_pdf(out, sign_info['key_path'], sign_info['cert_path'], sign_info['image_path'], sign_info['password'])
+                    success, error_msg = sign_pdf(out, sign_info['key_path'], sign_info['cert_path'], sign_info['image_path'], sign_info['password'])
+                    if not success:
+                        if os.path.exists(out): os.remove(out)
+                        raise ValueError(f"Digital Signing Failed. Please verify your certificate and password. Details: {error_msg}")
 
 # --- CONTROLLER ---
 class ReportController:
