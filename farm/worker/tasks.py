@@ -157,6 +157,7 @@ def generate_report_task(self, payload: dict):
             sign_info=sign_info,
             common_comment=payload.get("common_comment", ""),
             faculty_name=payload.get("faculty_name", ""),
+            proofs_text=payload.get("proofs_text", ""),
             output_dir=output_dir,
         )
 

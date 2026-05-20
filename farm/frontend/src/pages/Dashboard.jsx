@@ -4,11 +4,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import client, { downloadReport } from '../api/client';
+import client, { downloadReport, downloadProofs } from '../api/client';
 import TaskStatusCard from '../components/TaskStatusCard';
 import {
   FileSpreadsheet, Upload, ChevronDown, AlertTriangle, Zap,
-  FileText, Table2, BookOpen, Layers, Star, History, Download, RefreshCw,
+  FileText, Table2, BookOpen, Layers, Star, History, Download, RefreshCw, X
 } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 2500;
@@ -126,6 +126,79 @@ function FileInput({ label, accept, name, required, file, setFile, hint }) {
   );
 }
 
+function TypedMultiFileInput({ proofs, setProofs, maxFiles = 5 }) {
+  const [currentType, setCurrentType] = useState('Attendance for extra classes');
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (proofs.length >= maxFiles) {
+      alert(`You can only attach a maximum of ${maxFiles} files.`);
+      return;
+    }
+    setProofs([...proofs, { type: currentType, file }]);
+    e.target.value = '';
+  };
+
+  const removeProof = (index) => {
+    setProofs(proofs.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div style={{ marginBottom: '14px' }}>
+      <Label>Proof of Remediation {proofs.length > 0 && `(${proofs.length}/${maxFiles})`}</Label>
+      
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <select
+            value={currentType}
+            onChange={(e) => setCurrentType(e.target.value)}
+            style={{
+              width: '100%', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)',
+              borderRadius: '8px', padding: '9px 12px', color: 'var(--color-text)', fontSize: '14px',
+              outline: 'none', appearance: 'none', paddingRight: '32px', cursor: 'pointer',
+            }}
+          >
+            <option value="Attendance for extra classes">Attendance for extra classes</option>
+            <option value="Assignments">Assignments</option>
+            <option value="Others">Others</option>
+          </select>
+          <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)', pointerEvents: 'none' }} />
+        </div>
+        
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          background: 'var(--color-surface-2)', border: '1px dashed var(--color-primary)',
+          borderRadius: '8px', padding: '0 14px', cursor: 'pointer',
+          color: 'var(--color-primary)', fontSize: '13px', fontWeight: '500',
+        }}>
+          <Upload size={14} /> Attach
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleFileChange} />
+        </label>
+      </div>
+
+      {proofs.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          {proofs.map((proof, idx) => (
+            <div key={idx} style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+              borderRadius: '999px', padding: '4px 10px', fontSize: '12px',
+              color: 'var(--color-text)'
+            }}>
+              <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>{proof.type}:</span>
+              <span style={{ maxWidth: '100px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={proof.file.name}>
+                {proof.file.name}
+              </span>
+              <X size={12} style={{ cursor: 'pointer', color: 'var(--color-text-muted)' }} onClick={() => removeProof(idx)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Toggle({ label, checked, onChange }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '14px' }}>
@@ -163,6 +236,9 @@ export default function Dashboard() {
   const [advancedThreshold, setAdvancedThreshold] = useState(90);
   const [comment, setComment] = useState('');
   const [enableSigning, setEnableSigning] = useState(false);
+  const [proofs, setProofs] = useState([]);
+
+  const [showAllReports, setShowAllReports] = useState(false);
 
   // Task state
   const [taskId, setTaskId] = useState(null);
@@ -268,6 +344,11 @@ export default function Dashboard() {
     fd.append('common_comment', comment);
     fd.append('faculty_name', faculty?.name || '');
     fd.append('enable_signing', enableSigning ? 'true' : 'false');
+    
+    proofs.forEach(proof => {
+      fd.append('proof_types', proof.type);
+      fd.append('proof_files', proof.file);
+    });
 
     try {
       const r = await client.post('/generate-report', fd, {
@@ -292,6 +373,7 @@ export default function Dashboard() {
     setExcelFile(null);
     setCgpaFile(null);
     setGradeFile(null);
+    setProofs([]);
     setFormError('');
   };
 
@@ -449,6 +531,12 @@ export default function Dashboard() {
                     onBlur={e => e.target.style.borderColor = 'var(--color-border)'}
                   />
                 </div>
+
+                <TypedMultiFileInput
+                  proofs={proofs}
+                  setProofs={setProofs}
+                  maxFiles={5}
+                />
               </Card>
             </div>
           </div>
@@ -507,12 +595,19 @@ export default function Dashboard() {
             disabled={loadingHistory}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              background: 'none', border: 'none', color: 'var(--color-text-muted)',
-              fontSize: '13px', fontWeight: '600', cursor: 'pointer',
-              transition: 'color 0.15s',
+              background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+              borderRadius: '6px', padding: '6px 12px', color: 'var(--color-text)',
+              fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+              transition: 'all 0.15s'
             }}
-            onMouseOver={e => e.target.style.color = 'var(--color-primary)'}
-            onMouseOut={e => e.target.style.color = 'var(--color-text-muted)'}
+            onMouseOver={e => {
+              e.currentTarget.style.borderColor = 'var(--color-primary)';
+              e.currentTarget.style.color = 'var(--color-primary)';
+            }}
+            onMouseOut={e => {
+              e.currentTarget.style.borderColor = 'var(--color-border)';
+              e.currentTarget.style.color = 'var(--color-text)';
+            }}
           >
             <RefreshCw size={14} className={loadingHistory ? 'animate-spin' : ''} />
             Refresh
@@ -529,21 +624,22 @@ export default function Dashboard() {
                   <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Type</th>
                   <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Format</th>
                   <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Status</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600' }}>Proofs</th>
                   <th style={{ padding: '12px 16px', color: 'var(--color-text-muted)', fontWeight: '600', textAlign: 'right' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {history.length === 0 && !loadingHistory && (
                   <tr>
-                    <td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                    <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
                       No reports generated yet.
                     </td>
                   </tr>
                 )}
-                {history.map((item) => (
+                {(showAllReports ? history : history.slice(0, 5)).map((item) => (
                   <tr key={item.task_id} style={{ borderBottom: '1px solid var(--color-border)', transition: 'background 0.1s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--color-surface-2)'} onMouseOut={e => e.currentTarget.style.background = 'none'}>
-                    <td style={{ padding: '14px 16px' }}>
-                      {new Date(item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+                      {new Date(item.created_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '')}
                     </td>
                     <td style={{ padding: '14px 16px', fontWeight: '500' }}>{item.semester}</td>
                     <td style={{ padding: '14px 16px' }}>
@@ -568,6 +664,32 @@ export default function Dashboard() {
                       }}>
                         {item.status}
                       </span>
+                    </td>
+                    <td style={{ padding: '14px 16px' }}>
+                      {item.has_proofs && item.status === 'SUCCESS' && (
+                        <button
+                          onClick={() => downloadProofs(item.task_id)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '6px',
+                            background: 'none', border: '1px solid var(--color-border)',
+                            borderRadius: '6px', padding: '6px 10px', color: 'var(--color-text)',
+                            fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                          onMouseOver={e => {
+                            e.currentTarget.style.borderColor = 'var(--color-primary)';
+                            e.currentTarget.style.color = 'var(--color-primary)';
+                          }}
+                          onMouseOut={e => {
+                            e.currentTarget.style.borderColor = 'var(--color-border)';
+                            e.currentTarget.style.color = 'var(--color-text)';
+                          }}
+                        >
+                          <Download size={14} />
+                          ZIP
+                        </button>
+                      )}
+                      {!item.has_proofs && <span style={{ color: 'var(--color-text-muted)', fontSize: '13px' }}>-</span>}
                     </td>
                     <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                       {item.status === 'SUCCESS' && (
@@ -598,6 +720,20 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            
+            {history.length > 5 && (
+              <div style={{ textAlign: 'center', padding: '12px', background: 'var(--color-surface)' }}>
+                <button
+                  onClick={() => setShowAllReports(!showAllReports)}
+                  style={{
+                    background: 'none', border: 'none', color: 'var(--color-primary)',
+                    fontSize: '13px', fontWeight: '600', cursor: 'pointer',
+                  }}
+                >
+                  {showAllReports ? 'Collapse All' : `View More (${history.length - 5})`}
+                </button>
+              </div>
+            )}
           </div>
         </Card>
       </div>

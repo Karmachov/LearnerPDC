@@ -62,4 +62,30 @@ export async function downloadReport(taskId) {
   window.URL.revokeObjectURL(blobUrl);
 }
 
+export async function downloadProofs(taskId) {
+  const response = await client.get(`/download-proofs/${taskId}`, {
+    responseType: 'blob',
+    timeout: 120000,
+  });
+
+  const disposition = response.headers['content-disposition'] || '';
+  let filename = `proofs_${taskId.slice(0, 8)}.zip`;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";\n]+)"?/i);
+  if (utf8Match) {
+    filename = decodeURIComponent(utf8Match[1]);
+  } else if (plainMatch) {
+    filename = plainMatch[1];
+  }
+
+  const blobUrl = window.URL.createObjectURL(response.data);
+  const anchor = document.createElement('a');
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 export default client;

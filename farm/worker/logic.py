@@ -257,7 +257,7 @@ class StudentDataProcessor:
         except Exception:
             return 0.0
 
-    def process_data(self, all_data, subject_name, semester, common_comment, cgpa_map=None, grade_map=None):
+    def process_data(self, all_data, subject_name, semester, proofs_text, common_comment, cgpa_map=None, grade_map=None):
         cgpa_map = cgpa_map or {}
         grade_map = grade_map or {}
         for student in all_data:
@@ -266,7 +266,8 @@ class StudentDataProcessor:
             student['Semester'] = str(semester).strip().lower()
             roll = normalize_registration_number(student.get('Register Number of the Student', ''))
             student['CGPA (up to previous semester)'] = cgpa_map.get(roll, '')
-            student['Actions taken to improve performance'] = common_comment
+            student['Actions taken to improve performance'] = proofs_text
+            student['Remarks if any'] = common_comment
             grade = str(grade_map.get(roll, '')).strip().upper()
             if not grade or grade in ['NAN', 'NONE']:
                 student['Outcome (Based on clearance in end-semester or makeup exam)'] = ''
@@ -314,20 +315,21 @@ class BaseFormatter:
         cell.vertical_alignment = getattr(WD_ALIGN_VERTICAL, str(valign).upper(), WD_ALIGN_VERTICAL.TOP)
 
     def add_signature_line(self, doc_or_cell):
-        p = doc_or_cell.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         if self.signature_image_bytes:
+            p_img = doc_or_cell.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             try:
-                run = p.add_run()
+                run = p_img.add_run()
                 run.add_picture(io.BytesIO(self.signature_image_bytes), width=Inches(0.8))
-                # Line break only — run.add_break() can export as an extra blank page in LibreOffice PDF.
-                run.add_run("\n")
             except Exception:
                 pass
-        p.add_run("_" * 40 + "\n")
+                
+        p_text = doc_or_cell.add_paragraph()
+        p_text.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        p_text.add_run("_" * 40 + "\n")
         if self.faculty_name:
-            p.add_run(f"{self.faculty_name}\n")
-        p.add_run("Signature of the\nsubject teacher / class coordinator")
+            p_text.add_run(f"{self.faculty_name}\n")
+        p_text.add_run("Signature of the\nsubject teacher / class coordinator")
 
     def _add_document_header(self, cell):
         for line in ['Manipal Institute of Technology', 'MAHE Manipal', 'Computer Science and Engineering Department']:
@@ -435,9 +437,8 @@ class BaseFormatter:
             elif key == 'MidtermPercentage': val = f"{val:.2f}%"
             elif key == 'Subject Name': val = str(val).upper()
             self.set_cell_properties(ct.cell(i, 1), str(val).replace(';', '\n'), font_name=self.BODY_FONT)
-
         pd_ = doc.add_paragraph()
-        pd_.add_run(f"\nDate:{datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT
+        pd_.add_run(f"\nDate: {datetime.now().strftime('%d-%m-%Y')}").font.name = self.BODY_FONT
         self.add_signature_line(doc)
 
 
@@ -574,7 +575,7 @@ class ReportController:
     """
 
     def __init__(self, excel_path, cgpa_path, format_choice, learner_type, slow_thresh,
-                 advanced_thresh, output_type, semester, sign_info, common_comment,
+                 advanced_thresh, output_type, semester, sign_info, common_comment, proofs_text,
                  grade_path=None, faculty_name=None, output_dir=None):
         self.excel_path = excel_path
         self.cgpa_path = cgpa_path
@@ -587,6 +588,7 @@ class ReportController:
         self.semester = semester.lower().strip()
         self.sign_info = sign_info or {}
         self.common_comment = common_comment
+        self.proofs_text = proofs_text
         self.faculty_name = faculty_name
         self.output_dir = output_dir  # worker writes into the task-specific subdir
         self.reader = DataReader()
@@ -609,11 +611,11 @@ class ReportController:
 
         cgpa_map = self.reader.read_cgpa_map(self.cgpa_path)
         grade_map = self.reader.read_grade_map(self.grade_path, course_code=self.subject)
-        processed = self.processor.process_data(
-            all_data, self.subject, self.semester, self.common_comment, cgpa_map, grade_map
+        students_all = self.processor.process_data(
+            all_data, self.subject, self.semester, self.proofs_text, self.common_comment, cgpa_map, grade_map
         )
         filtered = self.processor.filter_students(
-            processed, self.learner_type, self.slow_threshold, self.advanced_threshold
+            students_all, self.learner_type, self.slow_threshold, self.advanced_threshold
         )
 
         act_f = '3' if not filtered else self.format_choice

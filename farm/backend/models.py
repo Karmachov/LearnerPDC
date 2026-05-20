@@ -87,6 +87,7 @@ class ReportRequest(BaseModel):
     common_comment: str = Field(default="")
     faculty_name: str = Field(default="")
     enable_signing: bool = False
+    proof_types: list[str] = Field(default_factory=list)
     # Only required if enable_signing=True AND the private key is NOT yet stored in DB
     key_password: Optional[str] = None
 
@@ -112,6 +113,7 @@ class ReportHistoryItem(BaseModel):
     learner_type: str
     format_choice: str
     output_type: str
+    has_proofs: bool = False
     created_at: datetime
 
 

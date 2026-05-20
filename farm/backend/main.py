@@ -241,6 +241,8 @@ async def generate_report(
     common_comment: str = Form(""),
     faculty_name: str = Form(""),
     enable_signing: bool = Form(False),
+    proof_types: list[str] = Form([]),
+    proof_files: list[UploadFile] = File(None),
     faculty: dict = Depends(get_current_faculty),
 ):
     # --- Validate inputs via Pydantic model ---
@@ -255,6 +257,7 @@ async def generate_report(
             common_comment=common_comment,
             faculty_name=faculty_name,
             enable_signing=enable_signing,
+            proof_types=proof_types,
         )
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -288,6 +291,35 @@ async def generate_report(
         grade_path = str(task_upload_dir / f"grade{grade_ext}")
         with open(grade_path, "wb") as f:
             f.write(await grade_file.read())
+
+    # --- Handle Proof Files ---
+    task_report_dir = REPORTS_DIR / task_id
+    if proof_files:
+        valid_proofs = [pf for pf in proof_files if pf.filename]
+        if len(valid_proofs) > 5:
+            raise HTTPException(status_code=400, detail="Maximum of 5 proof files can be attached.")
+        if len(valid_proofs) != len(req.proof_types):
+            raise HTTPException(status_code=400, detail="Mismatched proof files and proof types.")
+            
+        if valid_proofs:
+            task_report_dir.mkdir(parents=True, exist_ok=True)
+            for idx, (pf, ptype) in enumerate(zip(valid_proofs, req.proof_types)):
+                file_ext = Path(pf.filename).suffix.lower()
+                if file_ext not in {".pdf", ".png", ".jpg", ".jpeg"}:
+                    raise HTTPException(status_code=400, detail="Proof files must be PDF, PNG, or JPEG.")
+                
+                safe_type = ptype.replace(" ", "_").replace("/", "")
+                proof_path = task_report_dir / f"proof_{safe_type}_{idx}{file_ext}"
+                with open(proof_path, "wb") as f:
+                    f.write(await pf.read())
+
+    # --- Append Proof Type to Comment ---
+    final_comment = req.common_comment
+    proofs_text = ""
+    if req.proof_types:
+        unique_types = sorted(list(set(req.proof_types)))
+        types_str = ", ".join(unique_types)
+        proofs_text = f"Proofs: {types_str}"
 
     # --- Signing: verify keys exist and passphrase unlocks the key before queuing ---
     if req.enable_signing:
@@ -347,8 +379,9 @@ async def generate_report(
         "output_type": req.output_type,
         "slow_threshold": req.slow_threshold,
         "advanced_threshold": req.advanced_threshold,
-        "common_comment": req.common_comment,
+        "common_comment": final_comment,
         "faculty_name": req.faculty_name,
+        "proofs_text": proofs_text,
         "enable_signing": req.enable_signing,
     }
 
@@ -386,6 +419,8 @@ async def get_reports(faculty: dict = Depends(get_current_faculty)):
     from celery.result import AsyncResult
     from celery_app import celery_app
 
+    from datetime import timedelta
+
     tasks_col = get_tasks_collection()
     cursor = tasks_col.find({"faculty_id": str(faculty["_id"])}).sort("created_at", -1).limit(50)
     docs = await cursor.to_list(length=50)
@@ -396,6 +431,19 @@ async def get_reports(faculty: dict = Depends(get_current_faculty)):
         res = AsyncResult(d["task_id"], app=celery_app)
         status_str = res.state if res.state else d.get("status", "queued")
 
+        has_proofs = False
+        task_report_dir = REPORTS_DIR / d["task_id"]
+
+        # Fix for old reports showing as PENDING due to Celery expiring results
+        if status_str == "PENDING":
+            if task_report_dir.exists() and any(task_report_dir.iterdir()):
+                status_str = "SUCCESS"
+            elif datetime.now(timezone.utc) - d["created_at"].replace(tzinfo=timezone.utc) > timedelta(hours=1):
+                status_str = "FAILURE"
+        
+        if status_str == "SUCCESS" and task_report_dir.exists():
+            has_proofs = any(f.name.startswith("proof_") for f in task_report_dir.iterdir())
+
         reports.append(
             ReportHistoryItem(
                 task_id=d["task_id"],
@@ -404,7 +452,8 @@ async def get_reports(faculty: dict = Depends(get_current_faculty)):
                 learner_type=d.get("learner_type", "N/A"),
                 format_choice=d.get("format_choice", "N/A"),
                 output_type=d.get("output_type", "N/A"),
-                created_at=d["created_at"],
+                has_proofs=has_proofs,
+                created_at=d["created_at"].replace(tzinfo=timezone.utc),
             )
         )
 
@@ -477,9 +526,9 @@ async def download_report(task_id: str, faculty: dict = Depends(get_current_facu
     if not task_report_dir.exists():
         raise HTTPException(status_code=404, detail="Report not found or not yet generated.")
 
-    files = list(task_report_dir.iterdir())
+    files = [f for f in task_report_dir.iterdir() if not f.name.startswith("proof_")]
     if not files:
-        raise HTTPException(status_code=404, detail="Report directory is empty.")
+        raise HTTPException(status_code=404, detail="Report document not found.")
 
     if len(files) == 1:
         return FileResponse(
@@ -505,6 +554,35 @@ async def download_report(task_id: str, faculty: dict = Depends(get_current_facu
         headers={"Content-Disposition": f"attachment; filename=report_{task_id[:8]}.zip"},
     )
 
+
+@app.get("/download-proofs/{task_id}")
+async def download_proofs(task_id: str, faculty: dict = Depends(get_current_faculty)):
+    """Serve only the proof attachments in a zip archive."""
+    await _require_task_owner(task_id, faculty)
+    task_report_dir = REPORTS_DIR / task_id
+    if not task_report_dir.exists():
+        raise HTTPException(status_code=404, detail="Proofs not found.")
+
+    proof_files = [f for f in task_report_dir.iterdir() if f.name.startswith("proof_")]
+    if not proof_files:
+        raise HTTPException(status_code=404, detail="No proofs attached to this report.")
+
+    import zipfile
+    import io
+    from fastapi.responses import StreamingResponse
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fp in proof_files:
+            # Optionally remove 'proof_' prefix for a cleaner zip, but keeping it is fine
+            zf.write(fp, arcname=fp.name)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=proofs_{task_id[:8]}.zip"},
+    )
 
 # ===========================================================================
 # Helpers
