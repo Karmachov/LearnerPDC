@@ -1,0 +1,88 @@
+name: learner-pdc
+
+services:
+  # ─── MongoDB (Dockerised) ──────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: learner_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: learner_pdc
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── Redis (Dockerised) ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: learner_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── FastAPI Backend ──────────────────────────────────────────────────────
+  backend:
+    image: reebhuc/report-generator:v7-backend
+    container_name: learner_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      SHARED_DIR: /data/shared
+    volumes:
+      - ./shared_data:/data/shared
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Celery Worker ────────────────────────────────────────────────────────
+  worker:
+    image: reebhuc/report-generator:v7-worker
+    container_name: learner_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      SHARED_DIR: /data/shared
+    volumes:
+      - ./shared_data:/data/shared
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 2g
+
+  # ─── React Frontend (Nginx) ───────────────────────────────────────────────
+  frontend:
+    image: reebhuc/report-generator:v7-frontend
+    container_name: learner_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
