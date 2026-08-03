@@ -162,8 +162,14 @@ def sign_pdf(pdf_path: str, key_bytes: bytes, cert_bytes: bytes, image_bytes: by
 def normalize_registration_number(reg_num) -> str:
     if pd.isna(reg_num) or reg_num is None:
         return ''
-    normalized = str(reg_num).strip().replace('.0', '').replace(' ', '').upper()
-    return normalized
+    s = str(reg_num).strip().replace('\xa0', '').replace(' ', '').upper()
+    s = re.sub(r'\.0+$', '', s)
+    if '.' in s:
+        try:
+            s = str(int(float(s)))
+        except (ValueError, TypeError):
+            pass
+    return s
 
 
 # ==============================================================================
@@ -229,13 +235,34 @@ class DataReader:
             if file_path.lower().endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
-                df = pd.read_excel(file_path, sheet_name=0, engine=engine)
+                target_sheet = 0
+                if engine == 'openpyxl':
+                    try:
+                        import openpyxl
+                        wb = openpyxl.load_workbook(file_path, read_only=True)
+                        visible_sheets = [ws.title for ws in wb.worksheets if ws.sheet_state == 'visible']
+                        wb.close()
+                        if visible_sheets:
+                            target_sheet = visible_sheets[0]
+                    except Exception:
+                        target_sheet = 0
+                df = pd.read_excel(file_path, sheet_name=target_sheet, engine=engine)
+            
+            cgpa_dict = {}
             if len(df.columns) >= 2:
-                roll_col, cgpa_col = df.columns[0], df.columns[1]
-                df[roll_col] = df[roll_col].apply(normalize_registration_number)
-                return pd.Series(df[cgpa_col].values, index=df[roll_col]).to_dict()
+                for _, row in df.iterrows():
+                    roll = normalize_registration_number(row.iloc[0])
+                    cgpa_val = row.iloc[1]
+                    if roll and pd.notna(cgpa_val):
+                        try:
+                            cgpa_str = f"{float(cgpa_val):.2f}"
+                        except (ValueError, TypeError):
+                            cgpa_str = str(cgpa_val).strip()
+                        cgpa_dict[roll] = cgpa_str
+                return cgpa_dict
             return {}
-        except Exception:
+        except Exception as e:
+            print(f"Error reading CGPA map: {e}")
             return {}
 
     def read_grade_map(self, file_path: str, course_code: str = None) -> dict:
@@ -244,8 +271,9 @@ class DataReader:
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             df = pd.read_csv(file_path) if file_path.lower().endswith('.csv') else pd.read_excel(file_path, sheet_name=0, engine=engine)
+            grade_dict = {}
             if len(df.columns) >= 3:
-                enroll_col, course_col, grade_col = df.columns[0], df.columns[1], df.columns[2]
+                course_col = df.columns[1]
                 if course_code:
                     target_code = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
                     target_name = course_code.split('(')[0].strip() if '(' in course_code else course_code
@@ -254,12 +282,19 @@ class DataReader:
                            clean_course_col.str.contains(target_name.replace(' ', '').lower(), regex=False, na=False)
                     if mask.any():
                         df = df[mask]
-                df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
-                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+                for _, row in df.iterrows():
+                    roll = normalize_registration_number(row.iloc[0])
+                    grade_val = row.iloc[2]
+                    if roll and pd.notna(grade_val):
+                        grade_dict[roll] = str(grade_val).strip()
+                return grade_dict
             elif len(df.columns) == 2:
-                enroll_col, grade_col = df.columns[0], df.columns[1]
-                df[enroll_col] = df[enroll_col].apply(normalize_registration_number)
-                return pd.Series(df[grade_col].values, index=df[enroll_col]).to_dict()
+                for _, row in df.iterrows():
+                    roll = normalize_registration_number(row.iloc[0])
+                    grade_val = row.iloc[1]
+                    if roll and pd.notna(grade_val):
+                        grade_dict[roll] = str(grade_val).strip()
+                return grade_dict
             return {}
         except Exception as e:
             print(f"Error reading grade map: {e}")
