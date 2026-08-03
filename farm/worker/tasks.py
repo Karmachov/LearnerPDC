@@ -26,7 +26,9 @@ from shared.audit import audit_log_sync  # noqa: E402
 from shared.pem_validation import normalize_passphrase  # noqa: E402
 from shared.task_errors import ReportTaskError, user_facing_task_error  # noqa: E402
 
+# pyrefly: ignore [missing-import]
 from celery import Celery, states
+# pyrefly: ignore [missing-import]
 from celery.utils.log import get_task_logger
 
 # ---------------------------------------------------------------------------

@@ -171,17 +171,10 @@ def normalize_registration_number(reg_num) -> str:
 # ==============================================================================
 
 class DataReader:
-    COLUMN_MAPPING = {
-        'Roll Number': 'Register Number of the Student',
-        'Student Name': 'Student Name',
-        'Total (30) *': 'Midterm Exam Marks (Out of 30)',
-        'Student Viewed': 'Did student view the paper',
-    }
-
     def _extract_subject_from_header(self, file_path: str):
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-            df_header = pd.read_excel(file_path, engine=engine, nrows=5, header=None)
+            df_header = pd.read_excel(file_path, sheet_name=0, engine=engine, nrows=5, header=None)
             for val in df_header.iloc[:, 0]:
                 if val and isinstance(val, str) and "Exam:" in val:
                     last_slash = val.rfind('/')
@@ -191,22 +184,42 @@ class DataReader:
                         name = val[last_slash + 1: first_bracket].strip()
                         code = val[first_bracket + 1: last_bracket].strip() if last_bracket != -1 else ""
                         return f"{name} ({code})" if code else name
-            return None
+                    
+                    cleaned = val.replace("Exam:", "").strip()
+                    match = re.search(r'(?:/|-)?\s*([A-Za-z0-9\s&]+?)\s*(?:\[|\()([A-Za-z0-9]+)(?:\]|\))', cleaned)
+                    if match:
+                        return f"{match.group(1).strip()} ({match.group(2).strip()})"
+                    return cleaned
+            return "Unknown Subject"
         except Exception:
-            return None
+            return "Unknown Subject"
 
     def read_data(self, file_path: str):
         subject_name = self._extract_subject_from_header(file_path)
-        if not subject_name:
-            raise ValueError("Could not auto-detect subject name from the Excel file header.")
         engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-        df = pd.read_excel(file_path, skiprows=2, engine=engine)
-        df.columns = df.columns.str.strip()
-        df.rename(columns=self.COLUMN_MAPPING, inplace=True)
-        reg_col = 'Register Number of the Student'
-        if reg_col in df.columns:
-            df[reg_col] = df[reg_col].apply(normalize_registration_number)
-        return df.to_dict('records'), subject_name
+        df = pd.read_excel(file_path, sheet_name=0, engine=engine, header=None, skiprows=3)
+        
+        # Positional Column Mapping:
+        # Col C (Index 2): Student Name
+        # Col D (Index 3): Roll Number / Reg No
+        # Col F (Index 5): Total Marks (Out of 30)
+        records = []
+        for _, row in df.iterrows():
+            if len(row) > 3:
+                raw_roll = row.iloc[3]
+                reg_num = normalize_registration_number(raw_roll)
+                if not reg_num or reg_num == 'NAN':
+                    continue
+                name = str(row.iloc[2]).strip() if len(row) > 2 and pd.notna(row.iloc[2]) else ''
+                marks = row.iloc[5] if len(row) > 5 and pd.notna(row.iloc[5]) else ''
+                
+                records.append({
+                    'Student Name': name,
+                    'Register Number of the Student': reg_num,
+                    'Midterm Exam Marks (Out of 30)': marks
+                })
+        
+        return records, subject_name
 
     def read_cgpa_map(self, file_path: str) -> dict:
         if not file_path or not os.path.exists(file_path):
@@ -216,15 +229,7 @@ class DataReader:
             if file_path.lower().endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
-                xl = pd.ExcelFile(file_path)
-                best = xl.sheet_names[0]
-                if len(xl.sheet_names) > 1:
-                    max_rows = 0
-                    for sheet in xl.sheet_names:
-                        tmp = pd.read_excel(file_path, sheet_name=sheet, engine=engine)
-                        if len(tmp) > max_rows:
-                            max_rows = len(tmp); best = sheet
-                df = pd.read_excel(file_path, sheet_name=best, engine=engine)
+                df = pd.read_excel(file_path, sheet_name=0, engine=engine)
             if len(df.columns) >= 2:
                 roll_col, cgpa_col = df.columns[0], df.columns[1]
                 df[roll_col] = df[roll_col].apply(normalize_registration_number)
@@ -238,7 +243,7 @@ class DataReader:
             return {}
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-            df = pd.read_csv(file_path) if file_path.lower().endswith('.csv') else pd.read_excel(file_path, engine=engine)
+            df = pd.read_csv(file_path) if file_path.lower().endswith('.csv') else pd.read_excel(file_path, sheet_name=0, engine=engine)
             if len(df.columns) >= 3:
                 enroll_col, course_col, grade_col = df.columns[0], df.columns[1], df.columns[2]
                 if course_code:
