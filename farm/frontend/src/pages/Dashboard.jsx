@@ -416,7 +416,7 @@ export default function Dashboard() {
                 />
               </Card>
 
-              <Card style={{ marginTop: 20 }}>
+              {/* <Card style={{ marginTop: 20 }}>
                 <SectionTitle>Signing Options</SectionTitle>
                 <Toggle
                   label="Enable Digital Signature"
@@ -447,7 +447,7 @@ export default function Dashboard() {
                     {faculty?.has_signature ? '✅ Signature image stored.' : '⚠️ No signature image. Add one in Profile.'}
                   </p>
                 )}
-              </Card>
+              </Card> */}
             </div>
 
             {/* ── RIGHT COLUMN ── */}
@@ -464,7 +464,7 @@ export default function Dashboard() {
                   <option value="advanced">Advanced Learners</option>
                 </Select>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                {learnerType === 'slow' && (
                   <div>
                     <Label>Slow threshold (%)</Label>
                     <input
@@ -476,6 +476,9 @@ export default function Dashboard() {
                       onBlur={e => e.target.style.borderColor = 'var(--color-border)'}
                     />
                   </div>
+                )}
+
+                {learnerType === 'advanced' && (
                   <div>
                     <Label>Advanced threshold (%)</Label>
                     <input
@@ -487,7 +490,7 @@ export default function Dashboard() {
                       onBlur={e => e.target.style.borderColor = 'var(--color-border)'}
                     />
                   </div>
-                </div>
+                )}
 
                 <Select label="Report Format" required value={formatChoice} onChange={e => setFormatChoice(e.target.value)}>
                   {FORMAT_OPTIONS.map(f => (

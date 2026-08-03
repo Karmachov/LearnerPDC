@@ -277,8 +277,8 @@ export default function Profile() {
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <StatusBadge ok={faculty?.has_signature} label="Signature" />
-            <StatusBadge ok={faculty?.has_private_key} label="Private Key" />
-            <StatusBadge ok={faculty?.has_certificate} label="Certificate" />
+            {/* <StatusBadge ok={faculty?.has_private_key} label="Private Key" /> */}
+            {/* <StatusBadge ok={faculty?.has_certificate} label="Certificate" /> */}
           </div>
         </Card>
 
@@ -325,8 +325,8 @@ export default function Profile() {
             />
           </UploadSection>
 
-          {/* Key upload */}
-          <UploadSection
+          {/* Key upload - commented out for current release */}
+          {/* <UploadSection
             title="Signing Credentials"
             icon={<Key size={18} color="var(--color-primary)" />}
             onSubmit={uploadKeys}
@@ -385,7 +385,7 @@ export default function Profile() {
                 private key file (test with OpenSSL if unsure).
               </p>
             </div>
-          </UploadSection>
+          </UploadSection> */}
         </div>
       </div>
     </>
