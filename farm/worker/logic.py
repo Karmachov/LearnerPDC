@@ -180,51 +180,49 @@ class DataReader:
     def _extract_subject_from_header(self, file_path: str):
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-            df_header = pd.read_excel(file_path, sheet_name=0, engine=engine, nrows=5, header=None)
-            for val in df_header.iloc[:, 0]:
-                if val and isinstance(val, str) and "Exam:" in val:
-                    last_slash = val.rfind('/')
-                    first_bracket = val.find('[')
-                    last_bracket = val.find(']')
-                    if last_slash != -1 and first_bracket != -1:
-                        name = val[last_slash + 1: first_bracket].strip()
-                        code = val[first_bracket + 1: last_bracket].strip() if last_bracket != -1 else ""
-                        return f"{name} ({code})" if code else name
-                    
-                    cleaned = val.replace("Exam:", "").strip()
-                    match = re.search(r'(?:/|-)?\s*([A-Za-z0-9\s&]+?)\s*(?:\[|\()([A-Za-z0-9]+)(?:\]|\))', cleaned)
-                    if match:
-                        return f"{match.group(1).strip()} ({match.group(2).strip()})"
-                    return cleaned
-            return "Unknown Subject"
+            # Row 2 (0-indexed row 1), Col C (0-indexed col 2) holds the subject,
+            # formatted as "[CODE] Subject Name" e.g. "[CSS 1002] INTRODUCTION TO OBJECT ORIENTED PROGRAMMING"
+            df_header = pd.read_excel(file_path, sheet_name=0, engine=engine, nrows=2, header=None)
+            val = df_header.iloc[1, 2] if df_header.shape[0] > 1 and df_header.shape[1] > 2 else None
+            if pd.isna(val):
+                return "Unknown Subject"
+            val = str(val).strip()
+            match = re.match(r'\[([A-Za-z0-9\s]+)\]\s*(.+)', val)
+            if match:
+                code = match.group(1).strip()
+                name = match.group(2).strip()
+                return f"{name} ({code})" if code else name
+            return val or "Unknown Subject"
         except Exception:
             return "Unknown Subject"
 
     def read_data(self, file_path: str):
         subject_name = self._extract_subject_from_header(file_path)
         engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-        df = pd.read_excel(file_path, sheet_name=0, engine=engine, header=None, skiprows=3)
-        
+        df = pd.read_excel(file_path, sheet_name=0, engine=engine, header=None, skiprows=12)
+
         # Positional Column Mapping:
-        # Col C (Index 2): Student Name
-        # Col D (Index 3): Roll Number / Reg No
-        # Col F (Index 5): Total Marks (Out of 30)
+        # Col D (Index 3): Student Name
+        # Col E (Index 4): Registration Number (header cell is mislabeled "Question" —
+        #   it's the row-label column for the Question No/Marks/CO/Bloom's Level rows above,
+        #   but holds the student's reg number in the data rows)
+        # Col Y (Index 24): Total (Out of 30) — after 19 individual question columns (F-X)
         records = []
         for _, row in df.iterrows():
-            if len(row) > 3:
-                raw_roll = row.iloc[3]
+            if len(row) > 4:
+                raw_roll = row.iloc[4]
                 reg_num = normalize_registration_number(raw_roll)
                 if not reg_num or reg_num == 'NAN':
                     continue
-                name = str(row.iloc[2]).strip() if len(row) > 2 and pd.notna(row.iloc[2]) else ''
-                marks = row.iloc[5] if len(row) > 5 and pd.notna(row.iloc[5]) else ''
-                
+                name = str(row.iloc[3]).strip() if len(row) > 3 and pd.notna(row.iloc[3]) else ''
+                marks = row.iloc[24] if len(row) > 24 and pd.notna(row.iloc[24]) else ''
+
                 records.append({
                     'Student Name': name,
                     'Register Number of the Student': reg_num,
                     'Midterm Exam Marks (Out of 30)': marks
                 })
-        
+
         return records, subject_name
 
     def read_cgpa_map(self, file_path: str) -> dict:
