@@ -104,7 +104,7 @@ All configuration is in `farm/.env` (git-ignored). See [`farm/.env.example`](far
 | `MASTER_KEY` | **Yes** | Fernet key for encrypting signing credentials at rest |
 | `JWT_SECRET` | **Yes** | Secret for signing JWT access tokens |
 | `MONGO_DB` | No | Database name (default: `learner_pdc`) |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | Token TTL in minutes (default: `480`) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | Token TTL in minutes (default: `60`) |
 | `ALLOWED_ORIGINS` | No | CORS allowed origins (default: localhost) |
 
 ---
