@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { LayoutDashboard, Settings, LogOut, GraduationCap, FileText } from 'lucide-react';
 
 export default function Navbar() {
-  const { faculty, logout } = useAuth();
+  const { faculty, logout, photoVersion } = useAuth();
   const { pathname } = useLocation();
 
   const navLink = (to, icon, label) => {
@@ -80,7 +80,7 @@ export default function Navbar() {
             </div>
             {faculty.has_photo ? (
               <img 
-                src={`/api/faculty/${faculty._id}/photo`} 
+                src={`/api/faculty/${faculty._id}/photo?v=${photoVersion}`}
                 alt={faculty.name}
                 style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--color-border)' }}
               />

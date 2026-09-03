@@ -10,12 +10,16 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [faculty, setFaculty] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Bumped on every faculty refresh so <img src="/api/faculty/{id}/photo"> tags
+  // (whose URL is otherwise identical before/after a re-upload) are forced to
+  // re-fetch instead of showing the browser's cached copy of the old photo.
+  const [photoVersion, setPhotoVersion] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem('access_token');
     if (!token) { setLoading(false); return; }
     client.get('/auth/me')
-      .then(r => setFaculty(r.data))
+      .then(r => { setFaculty(r.data); setPhotoVersion(v => v + 1); })
       .catch(() => localStorage.removeItem('access_token'))
       .finally(() => setLoading(false));
   }, []);
@@ -28,6 +32,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('access_token', r.data.access_token);
     const me = await client.get('/auth/me');
     setFaculty(me.data);
+    setPhotoVersion(v => v + 1);
   };
 
   const logout = () => {
@@ -37,13 +42,15 @@ export function AuthProvider({ children }) {
 
   /**
    * refreshFaculty — re-fetches /auth/me from the live database and updates
-   * the faculty state. Call this after any profile mutation (signature/key upload)
-   * so the status badges update immediately without requiring a page reload.
+   * the faculty state. Call this after any profile mutation (photo/signature/key
+   * upload) so the status badges — and the photo <img>, via photoVersion — update
+   * immediately without requiring a page reload.
    */
   const refreshFaculty = async () => {
     try {
       const me = await client.get('/auth/me');
       setFaculty(me.data);
+      setPhotoVersion(v => v + 1);
     } catch {
       // Token may have expired — force logout
       localStorage.removeItem('access_token');
@@ -52,7 +59,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ faculty, loading, login, logout, refreshFaculty }}>
+    <AuthContext.Provider value={{ faculty, loading, login, logout, refreshFaculty, photoVersion }}>
       {children}
     </AuthContext.Provider>
   );

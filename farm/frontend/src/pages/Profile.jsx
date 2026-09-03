@@ -159,7 +159,7 @@ function UploadSection({ title, icon, children, onSubmit, loading, success, erro
 }
 
 export default function Profile() {
-  const { faculty, refreshFaculty } = useAuth();
+  const { faculty, refreshFaculty, photoVersion } = useAuth();
 
   // Signature upload state
   const [sigFile, setSigFile] = useState(null);
@@ -189,7 +189,7 @@ export default function Profile() {
       const fd = new FormData();
       fd.append('image', sigFile);
       await client.put('/profile/signature', fd);
-      setSigSuccess('Signature image encrypted and saved to the secure vault.');
+      setSigSuccess('Initial image encrypted and saved to the secure vault.');
       await refreshFaculty();
     } catch (err) {
       setSigError(parseUploadError(err));
@@ -253,7 +253,7 @@ export default function Profile() {
         <Card style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
           {faculty?.has_photo ? (
             <img 
-              src={`/api/faculty/${faculty._id}/photo`} 
+              src={`/api/faculty/${faculty._id}/photo?v=${photoVersion}`}
               alt={faculty.name}
               style={{
                 width: 54, height: 54, borderRadius: '50%', objectFit: 'cover',
@@ -276,7 +276,7 @@ export default function Profile() {
             <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{faculty?.email}</div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <StatusBadge ok={faculty?.has_signature} label="Signature" />
+            <StatusBadge ok={faculty?.has_signature} label="Initial" />
             {/* <StatusBadge ok={faculty?.has_private_key} label="Private Key" /> */}
             {/* <StatusBadge ok={faculty?.has_certificate} label="Certificate" /> */}
           </div>
@@ -306,7 +306,7 @@ export default function Profile() {
 
           {/* Signature upload */}
           <UploadSection
-            title="Signature Image"
+            title="Initial"
             icon={<ImageIcon size={18} color="var(--color-primary)" />}
             onSubmit={uploadSignature}
             loading={sigLoading}
@@ -317,7 +317,7 @@ export default function Profile() {
               This image will appear on all report pages. PNG with transparent background recommended.
             </p>
             <FileDropZone
-              label="Signature Image"
+              label="Initial"
               accept="image/png,image/jpeg"
               file={sigFile}
               setFile={setSigFile}

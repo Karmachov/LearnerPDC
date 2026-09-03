@@ -399,7 +399,7 @@ export default function Dashboard() {
                   hint="Choose .xls or .xlsx…"
                 />
                 <FileInput
-                  label="CGPA File (optional)"
+                  label="CGPA File"
                   accept=".xls,.xlsx,.csv"
                   name="cgpa_file"
                   file={cgpaFile}
@@ -407,7 +407,7 @@ export default function Dashboard() {
                   hint="CGPA data for previous semester…"
                 />
                 <FileInput
-                  label="Grade Sheet (optional)"
+                  label="Grade Sheet"
                   accept=".xls,.xlsx,.csv"
                   name="grade_file"
                   file={gradeFile}
