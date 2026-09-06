@@ -341,11 +341,27 @@ class Format3DocxFormatter(BaseFormatter):
         self.add_signature_line(doc); return doc
 
 class Format1And2DocxFormatter(BaseFormatter):
-    def format(self, students, st, ft):
-        doc = Document(); [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
-        for i, student in enumerate(students): 
-            self._create_format1_content(doc, student, st, ft); doc.add_page_break()
-            self._create_format2_content(doc, student); (i < len(students)-1) and doc.add_page_break()
+    def format(self, students, slow_threshold, fast_threshold):
+        print(f"FORMAT 4 STARTED - {len(students)} students")
+
+        doc = Document()
+
+        for i, s in enumerate(students):
+            print(f"PROCESSING STUDENT {i+1}/{len(students)}: {s.get('Student Name')}")
+
+            self._create_format1_content(
+                doc, s, slow_threshold, fast_threshold
+            )
+
+            print(f"FORMAT 1 DONE - student {i+1}")
+
+        self._create_format2_content(
+            doc, s
+        )
+
+        print(f"FORMAT 2 DONE - student {i+1}")
+
+        print("FORMAT 4 COMPLETE")
         return doc
 
 # --- WRITERS ---
@@ -376,13 +392,22 @@ class ReportController:
 
     def run(self):
         all_data, self.subject = self.reader.read_data(self.excel_path)
+        print("=== FIRST 5 STUDENTS FROM EXCEL ===")
+        for student in all_data[:5]:
+            print(
+                "NAME =", repr(student.get("Student Name")),
+                "| REG =", repr(student.get("Register Number of the Student"))
+            )
         if not all_data: return None
         cg_map = self.reader.read_cgpa_map(self.cgpa_path)
         grade_map = self.reader.read_grade_map(self.grade_path, course_code=self.subject)
         processed = self.processor.process_data(all_data, self.subject, self.semester, self.common_comment, cg_map, grade_map)
         filtered = self.processor.filter_students(processed, self.learner_type, self.slow_threshold, self.advanced_threshold)
-        
+        print(f"TOTAL STUDENTS READ: {len(all_data)}")
+        print(f"STUDENTS AFTER FILTER: {len(filtered)}")
         act_f = '3' if not filtered else self.format_choice
+        print(f"FORMAT: {act_f}")
+        print(f"OUTPUT TYPE: {self.output_type}")
         ds = datetime.now().strftime('%d_%m_%y'); sn = self.semester.upper()
         sub_dir = re.sub(r'[\\/*?:"<>|]', "", self.subject.replace(' ', '_'))
         od = os.path.join("Learner_Monitor_Reports", f"{self.learner_type.title()}_Learners", f"Semester_{sn}", sub_dir)
