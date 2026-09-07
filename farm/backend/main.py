@@ -63,6 +63,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXCEL_EXTENSIONS = {".xls", ".xlsx"}
+ALLOWED_CGPA_GRADE_EXTENSIONS = {".xls", ".xlsx", ".csv"}
 
 # ---------------------------------------------------------------------------
 # App
@@ -313,6 +314,9 @@ async def generate_report(
     cgpa_path = None
     if cgpa_file and cgpa_file.filename:
         cgpa_ext = Path(cgpa_file.filename).suffix.lower()
+        if cgpa_ext not in ALLOWED_CGPA_GRADE_EXTENSIONS:
+            shutil.rmtree(task_upload_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="CGPA file must be .xls, .xlsx, or .csv.")
         cgpa_path = str(task_upload_dir / f"cgpa{cgpa_ext}")
         with open(cgpa_path, "wb") as f:
             f.write(await cgpa_file.read())
@@ -320,6 +324,9 @@ async def generate_report(
     grade_path = None
     if grade_file and grade_file.filename:
         grade_ext = Path(grade_file.filename).suffix.lower()
+        if grade_ext not in ALLOWED_CGPA_GRADE_EXTENSIONS:
+            shutil.rmtree(task_upload_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="Grade file must be .xls, .xlsx, or .csv.")
         grade_path = str(task_upload_dir / f"grade{grade_ext}")
         with open(grade_path, "wb") as f:
             f.write(await grade_file.read())

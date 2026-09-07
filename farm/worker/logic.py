@@ -199,7 +199,13 @@ class DataReader:
     def read_data(self, file_path: str):
         subject_name = self._extract_subject_from_header(file_path)
         engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
-        df = pd.read_excel(file_path, sheet_name=0, engine=engine, header=None, skiprows=12)
+        try:
+            df = pd.read_excel(file_path, sheet_name=0, engine=engine, header=None, skiprows=12)
+        except Exception as exc:
+            raise ValueError(
+                "Could not read the marks Excel file. Make sure it is a valid, uncorrupted "
+                f".xls/.xlsx file ({exc})."
+            ) from exc
 
         # Positional Column Mapping:
         # Col D (Index 3): Student Name
@@ -207,21 +213,34 @@ class DataReader:
         #   it's the row-label column for the Question No/Marks/CO/Bloom's Level rows above,
         #   but holds the student's reg number in the data rows)
         # Col Y (Index 24): Total (Out of 30) — after 19 individual question columns (F-X)
+        MIN_COLUMNS = 25
+        if df.shape[1] < MIN_COLUMNS:
+            raise ValueError(
+                "This Excel file doesn't match the expected mid-term marks format: found only "
+                f"{df.shape[1]} column(s), expected at least {MIN_COLUMNS} (through the Total(30) "
+                "column). Check that you selected the correct marks sheet."
+            )
+
         records = []
         for _, row in df.iterrows():
-            if len(row) > 4:
-                raw_roll = row.iloc[4]
-                reg_num = normalize_registration_number(raw_roll)
-                if not reg_num or reg_num == 'NAN':
-                    continue
-                name = str(row.iloc[3]).strip() if len(row) > 3 and pd.notna(row.iloc[3]) else ''
-                marks = row.iloc[24] if len(row) > 24 and pd.notna(row.iloc[24]) else ''
+            raw_roll = row.iloc[4]
+            reg_num = normalize_registration_number(raw_roll)
+            if not reg_num or reg_num == 'NAN':
+                continue
+            name = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
+            marks = row.iloc[24] if pd.notna(row.iloc[24]) else ''
 
-                records.append({
-                    'Student Name': name,
-                    'Register Number of the Student': reg_num,
-                    'Midterm Exam Marks (Out of 30)': marks
-                })
+            records.append({
+                'Student Name': name,
+                'Register Number of the Student': reg_num,
+                'Midterm Exam Marks (Out of 30)': marks
+            })
+
+        if not records:
+            raise ValueError(
+                "No student rows could be read from the Excel file. Check that it matches the "
+                "expected mid-term marks format and has data below the header rows."
+            )
 
         return records, subject_name
 
@@ -245,23 +264,29 @@ class DataReader:
                     except Exception:
                         target_sheet = 0
                 df = pd.read_excel(file_path, sheet_name=target_sheet, engine=engine)
-            
-            cgpa_dict = {}
-            if len(df.columns) >= 2:
-                for _, row in df.iterrows():
-                    roll = normalize_registration_number(row.iloc[0])
-                    cgpa_val = row.iloc[1]
-                    if roll and pd.notna(cgpa_val):
-                        try:
-                            cgpa_str = f"{float(cgpa_val):.2f}"
-                        except (ValueError, TypeError):
-                            cgpa_str = str(cgpa_val).strip()
-                        cgpa_dict[roll] = cgpa_str
-                return cgpa_dict
-            return {}
-        except Exception as e:
-            print(f"Error reading CGPA map: {e}")
-            return {}
+        except Exception as exc:
+            raise ValueError(
+                "Could not read the CGPA file. Make sure it is a valid, uncorrupted "
+                f".xls/.xlsx/.csv file ({exc})."
+            ) from exc
+
+        if len(df.columns) < 2:
+            raise ValueError(
+                "The CGPA file doesn't match the expected format: it needs at least two columns "
+                "(Enrollment No., Net Semester CGPA)."
+            )
+
+        cgpa_dict = {}
+        for _, row in df.iterrows():
+            roll = normalize_registration_number(row.iloc[0])
+            cgpa_val = row.iloc[1]
+            if roll and pd.notna(cgpa_val):
+                try:
+                    cgpa_str = f"{float(cgpa_val):.2f}"
+                except (ValueError, TypeError):
+                    cgpa_str = str(cgpa_val).strip()
+                cgpa_dict[roll] = cgpa_str
+        return cgpa_dict
 
     def read_grade_map(self, file_path: str, course_code: str = None) -> dict:
         if not file_path or not os.path.exists(file_path):
@@ -269,34 +294,41 @@ class DataReader:
         try:
             engine = 'xlrd' if file_path.lower().endswith('.xls') else 'openpyxl'
             df = pd.read_csv(file_path) if file_path.lower().endswith('.csv') else pd.read_excel(file_path, sheet_name=0, engine=engine)
-            grade_dict = {}
-            if len(df.columns) >= 3:
-                course_col = df.columns[1]
-                if course_code:
-                    target_code = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
-                    target_name = course_code.split('(')[0].strip() if '(' in course_code else course_code
-                    clean_course_col = df[course_col].astype(str).str.replace(' ', '').str.lower()
-                    mask = clean_course_col.str.contains(target_code.replace(' ', '').lower(), regex=False, na=False) | \
-                           clean_course_col.str.contains(target_name.replace(' ', '').lower(), regex=False, na=False)
-                    if mask.any():
-                        df = df[mask]
-                for _, row in df.iterrows():
-                    roll = normalize_registration_number(row.iloc[0])
-                    grade_val = row.iloc[2]
-                    if roll and pd.notna(grade_val):
-                        grade_dict[roll] = str(grade_val).strip()
-                return grade_dict
-            elif len(df.columns) == 2:
-                for _, row in df.iterrows():
-                    roll = normalize_registration_number(row.iloc[0])
-                    grade_val = row.iloc[1]
-                    if roll and pd.notna(grade_val):
-                        grade_dict[roll] = str(grade_val).strip()
-                return grade_dict
-            return {}
-        except Exception as e:
-            print(f"Error reading grade map: {e}")
-            return {}
+        except Exception as exc:
+            raise ValueError(
+                "Could not read the grade file. Make sure it is a valid, uncorrupted "
+                f".xls/.xlsx/.csv file ({exc})."
+            ) from exc
+
+        if len(df.columns) < 2:
+            raise ValueError(
+                "The grade file doesn't match the expected format: it needs at least two columns "
+                "(Enrollment Id., Grade Obtained), or three (Enrollment Id., Course Code, Grade Obtained)."
+            )
+
+        grade_dict = {}
+        if len(df.columns) >= 3:
+            course_col = df.columns[1]
+            if course_code:
+                target_code = course_code.split('(')[-1].replace(')', '').strip() if '(' in course_code else course_code
+                target_name = course_code.split('(')[0].strip() if '(' in course_code else course_code
+                clean_course_col = df[course_col].astype(str).str.replace(' ', '').str.lower()
+                mask = clean_course_col.str.contains(target_code.replace(' ', '').lower(), regex=False, na=False) | \
+                       clean_course_col.str.contains(target_name.replace(' ', '').lower(), regex=False, na=False)
+                if mask.any():
+                    df = df[mask]
+            for _, row in df.iterrows():
+                roll = normalize_registration_number(row.iloc[0])
+                grade_val = row.iloc[2]
+                if roll and pd.notna(grade_val):
+                    grade_dict[roll] = str(grade_val).strip()
+        else:  # exactly 2 columns
+            for _, row in df.iterrows():
+                roll = normalize_registration_number(row.iloc[0])
+                grade_val = row.iloc[1]
+                if roll and pd.notna(grade_val):
+                    grade_dict[roll] = str(grade_val).strip()
+        return grade_dict
 
 
 # ==============================================================================
