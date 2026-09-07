@@ -345,6 +345,7 @@ class Format1And2DocxFormatter(BaseFormatter):
         print(f"FORMAT 4 STARTED - {len(students)} students")
 
         doc = Document()
+        [setattr(sec, 'top_margin', Inches(0.5)) for sec in doc.sections]
 
         for i, s in enumerate(students):
             print(f"PROCESSING STUDENT {i+1}/{len(students)}: {s.get('Student Name')}")
@@ -352,14 +353,17 @@ class Format1And2DocxFormatter(BaseFormatter):
             self._create_format1_content(
                 doc, s, slow_threshold, fast_threshold
             )
+            doc.add_page_break()
 
             print(f"FORMAT 1 DONE - student {i+1}")
 
-        self._create_format2_content(
-            doc, s
-        )
+            self._create_format2_content(
+                doc, s
+            )
+            if i < len(students) - 1:
+                doc.add_page_break()
 
-        print(f"FORMAT 2 DONE - student {i+1}")
+            print(f"FORMAT 2 DONE - student {i+1}")
 
         print("FORMAT 4 COMPLETE")
         return doc
