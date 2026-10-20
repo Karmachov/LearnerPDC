@@ -46,6 +46,8 @@ Learner_Monitor_Reports/
 *.xlsx
 *.xls
 *.docx
+# synthetic sample for the learner-classifier skill (no real student data)
+!skills/learner-classifier/assets/sample_marks.xlsx
 
 # ── Node / frontend build artifacts ────────────────────────────
 node_modules/
